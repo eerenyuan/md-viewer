@@ -1,0 +1,85 @@
+{
+  "name": "md-viewer",
+  "version": "0.1.0",
+  "description": "Lightweight markdown + excalidraw viewer",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/install-electron-bin.cjs",
+    "build": "vite build",
+    "start": "vite build && electron .",
+    "dev": "electron .",
+    "typecheck": "tsc --noEmit",
+    "dist": "vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.yuan.mdviewer",
+    "productName": "MD Viewer",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "build/icon.png"
+    ],
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown Document",
+        "role": "Viewer"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown Document",
+        "role": "Viewer"
+      },
+      {
+        "ext": "mkd",
+        "name": "Markdown Document",
+        "role": "Viewer"
+      },
+      {
+        "ext": "mdown",
+        "name": "Markdown Document",
+        "role": "Viewer"
+      },
+      {
+        "ext": "excalidraw",
+        "name": "Excalidraw Scene",
+        "role": "Viewer"
+      }
+    ]
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.4",
+    "@codemirror/view": "^6.43.11",
+    "@excalidraw/excalidraw": "^0.18.1",
+    "@mdit/plugin-katex": "^1.1.1",
+    "@vscode/markdown-it-katex": "^1.1.2",
+    "github-markdown-css": "^5.9.0",
+    "highlight.js": "^11.12.0",
+    "lz-string": "^1.5.0",
+    "markdown-it": "^15.0.1",
+    "markdown-it-anchor": "^10.0.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^11.17.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}
