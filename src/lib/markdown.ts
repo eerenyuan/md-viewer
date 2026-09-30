@@ -62,7 +62,14 @@ export function renderInline(source: string): string {
  * then turn it into a local-file:// URL served by the main process.
  */
 export function toLocalFileUrl(dirSlash: string, href: string): string {
-  const clean = href.split('#')[0].split('?')[0]
+  let clean = href.split('#')[0].split('?')[0]
+  // markdown-it (mdurl) may already percent-encode non-ASCII hrefs; decode
+  // first so we never double-encode, then encode once below.
+  try {
+    clean = decodeURIComponent(clean)
+  } catch {
+    /* malformed escape sequence: keep raw */
+  }
   const isAbsolute = /^([a-zA-Z]:\/|\/|local-file:|https?:|data:)/.test(clean)
   const base = isAbsolute ? '' : dirSlash.replace(/\/+$/, '') + '/'
   const stack: string[] = []
