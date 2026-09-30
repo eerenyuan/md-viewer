@@ -1,5 +1,3 @@
-import { useMemo } from 'react'
-
 export interface TabMeta {
   path: string
 }
@@ -17,13 +15,8 @@ function baseName(p: string) {
 }
 
 export default function TabBar({ tabs, activePath, onSelect, onClose }: Props) {
-  const tabWidthClass = useMemo(() => {
-    if (tabs.length <= 8) return ''
-    return 'compact'
-  }, [tabs.length])
-
   return (
-    <div className={`tab-bar ${tabWidthClass}`}>
+    <div className="tab-bar">
       {tabs.map((t) => (
         <div
           key={t.path}

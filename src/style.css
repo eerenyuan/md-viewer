@@ -60,8 +60,8 @@ body {
   align-items: center;
   gap: 6px;
   padding: 0 8px 0 10px;
-  min-width: 120px;
-  max-width: 220px;
+  flex: none;
+  width: 180px;
   border-radius: 8px 8px 0 0;
   border: 1px solid transparent;
   border-bottom: none;
@@ -81,11 +81,6 @@ body {
   border-color: rgba(125, 125, 125, 0.2);
   color: #24292f;
   font-weight: 500;
-}
-
-.tab-bar.compact .tab {
-  min-width: 90px;
-  max-width: 150px;
 }
 
 .tab-icon {
