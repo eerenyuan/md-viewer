@@ -7,6 +7,7 @@ import { renderMermaid } from '../lib/mermaid'
 import { exportToSvg } from '@excalidraw/excalidraw'
 import TocPanel, { type TocHeading } from '../TocPanel'
 import StaleBanner from '../StaleBanner'
+import FindBar from '../FindBar'
 
 interface Props {
   content: string
@@ -14,6 +15,43 @@ interface Props {
   stale: boolean
   onReload: () => void
   onDismiss: () => void
+}
+
+/** Map the current view-mode scroll position to a source offset for the
+ *  editor: anchor on the last heading scrolled past (occurrence-aligned with
+ *  the source heading lines), fall back to scroll fraction. */
+function computeEditorAnchor(content: string): number {
+  const scroll = document.querySelector('.md-scroll') as HTMLElement | null
+  const body = scroll?.querySelector('.markdown-body') as HTMLElement | null
+  if (!scroll || !body) return 0
+  const viewportTop = scroll.getBoundingClientRect().top
+  const heads = [...body.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')]
+  let target: HTMLElement | null = null
+  for (const h of heads) {
+    if (h.getBoundingClientRect().bottom <= viewportTop + 4) target = h
+    else break
+  }
+  if (target?.textContent) {
+    const text = target.textContent.replace(/\s+/g, '')
+    let occurrence = 0
+    for (const h of heads) {
+      if (h === target) break
+      if (h.textContent?.replace(/\s+/g, '') === text) occurrence++
+    }
+    let off = 0
+    let seen = 0
+    for (const line of content.split('\n')) {
+      const m = /^#{1,6}[ \t]+(.*)/.exec(line)
+      if (m && m[1].replace(/\s+/g, '') === text) {
+        if (seen === occurrence) return off + line.indexOf(m[1])
+        seen++
+      }
+      off += line.length + 1
+    }
+  }
+  const sh = scroll.scrollHeight - scroll.clientHeight
+  const frac = sh > 0 ? Math.min(1, Math.max(0, scroll.scrollTop / sh)) : 0
+  return Math.round(frac * content.length)
 }
 
 /** Resolve and inline-render every Excalidraw embed in the rendered container. */
@@ -107,16 +145,19 @@ function RenderedDoc({
   content,
   dirSlash,
   onToc,
+  bodyRef,
+  zoom,
 }: {
   content: string
   dirSlash: string
   onToc: (headings: TocHeading[]) => void
+  bodyRef: React.RefObject<HTMLDivElement | null>
+  zoom: number
 }) {
-  const containerRef = useRef<HTMLDivElement>(null)
   const html = useMemo(() => renderMarkdown(content), [content])
 
   useEffect(() => {
-    const el = containerRef.current
+    const el = bodyRef.current
     if (!el) return
     el.innerHTML = html
 
@@ -156,10 +197,9 @@ function RenderedDoc({
       .map((h) => ({ id: h.id, text: h.textContent ?? '', level: Number(h.tagName[1]) }))
     onToc(headings)
   }, [html, dirSlash])
-
   return (
-    <div className="md-scroll">
-      <div ref={containerRef} className="markdown-body" />
+    <div className="md-scroll" style={{ zoom }}>
+      <div ref={bodyRef} className="markdown-body" />
     </div>
   )
 }
@@ -168,6 +208,13 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
   const [mode, setMode] = useState<'view' | 'edit'>('view')
   const [dirty, setDirty] = useState(false)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [findOpen, setFindOpen] = useState(false)
+  const [editorAnchor, setEditorAnchor] = useState(0)
+  const [zoom, setZoom] = useState(() => {
+    const saved = Number(localStorage.getItem('zoom'))
+    return Number.isFinite(saved) && saved >= 0.5 && saved <= 2.5 ? saved : 1
+  })
+  const docRef = useRef<HTMLDivElement>(null)
   const [dark, setDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [toc, setToc] = useState<TocHeading[]>([])
   const [tocVisible, setTocVisible] = useState(() => {
@@ -195,10 +242,40 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
     localStorage.setItem('toc', tocVisible ? '1' : '0')
   }, [tocVisible])
 
+  useEffect(() => {
+    localStorage.setItem('zoom', String(zoom))
+  }, [zoom])
+
+  // Ctrl+wheel adjusts document zoom (50%–250%), Ctrl+0 resets
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      setZoom((z) => {
+        const next = z * (e.deltaY < 0 ? 1.1 : 1 / 1.1)
+        return Math.min(2.5, Math.max(0.5, Math.round(next * 100) / 100))
+      })
+    }
+    const onZoomKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === '0') {
+        e.preventDefault()
+        setZoom(1)
+      }
+    }
+    window.addEventListener('wheel', onWheel, { passive: false })
+    window.addEventListener('keydown', onZoomKey)
+    return () => {
+      window.removeEventListener('wheel', onWheel)
+      window.removeEventListener('keydown', onZoomKey)
+    }
+  }, [])
+
   const enterEditMode = () => {
     savedRef.current = content
     setConfirmDiscard(false)
     setDirty(false)
+    setFindOpen(false)
+    setEditorAnchor(computeEditorAnchor(content))
     setMode('edit')
   }
 
@@ -256,6 +333,9 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
       } else if (e.key.toLowerCase() === 'p' && mode === 'view') {
         e.preventDefault()
         void exportPdf()
+      } else if (e.key.toLowerCase() === 'f' && mode === 'view') {
+        e.preventDefault()
+        setFindOpen(true)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -264,6 +344,11 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
 
   // when clean, follow external content changes; when dirty, protect the buffer
   const editorContent = dirty ? savedRef.current : content
+
+  // re-rendered content invalidates live find ranges — close the bar
+  useEffect(() => {
+    setFindOpen(false)
+  }, [content])
 
   return (
     <>
@@ -299,6 +384,14 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
         )}
       </div>
       {stale && <StaleBanner dirty={mode === 'edit' && dirty} onReload={handleStaleReload} onDismiss={onDismiss} />}
+      {mode === 'view' && findOpen && (
+        <FindBar
+          containerRef={docRef}
+          html={content}
+          topOffset={stale ? 46 : 0}
+          onClose={() => setFindOpen(false)}
+        />
+      )}
       {mode === 'view' && tocVisible && <TocPanel headings={toc} />}
       {mode === 'edit' ? (
         <LiveEditor
@@ -307,9 +400,11 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
           dark={dark}
           onDirtyChange={setDirty}
           viewRef={cmRef}
+          initialPos={editorAnchor}
+          zoom={zoom}
         />
       ) : (
-        <RenderedDoc content={content} dirSlash={dirSlash} onToc={setToc} />
+        <RenderedDoc content={content} dirSlash={dirSlash} onToc={setToc} bodyRef={docRef} zoom={zoom} />
       )}
     </>
   )

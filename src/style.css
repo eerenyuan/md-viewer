@@ -173,9 +173,9 @@ body {
 }
 
 .markdown-body {
-  max-width: 980px;
+  max-width: none;
   margin: 0 auto;
-  padding: 32px 32px 128px;
+  padding: 32px 48px 128px;
   box-sizing: border-box;
 }
 
@@ -357,6 +357,34 @@ body {
 
 .cm-md-widget img { max-width: 100%; }
 
+/* ---------- live preview: active block & caret emphasis ---------- */
+
+/* the source-form block the caret is in — soft background so a cross-block
+   jump is easy to spot */
+.cm-line.cm-active-block {
+  background: rgba(31, 111, 235, 0.07);
+}
+
+/* the caret's own line reads slightly stronger than the rest of the block */
+.cm-line.cm-activeLine {
+  background: rgba(31, 111, 235, 0.13);
+}
+
+.cm-line.cm-active-block.cm-activeLine {
+  background: rgba(31, 111, 235, 0.13);
+}
+
+@media (prefers-color-scheme: dark) {
+  .cm-line.cm-active-block {
+    background: rgba(88, 166, 255, 0.09);
+  }
+
+  .cm-line.cm-activeLine,
+  .cm-line.cm-active-block.cm-activeLine {
+    background: rgba(88, 166, 255, 0.16);
+  }
+}
+
 .cm-md-widget hr {
   border: none;
   border-top: 2px solid rgba(125, 125, 125, 0.3);
@@ -528,6 +556,11 @@ body {
   .md-scroll {
     overflow: visible !important;
     height: auto !important;
+    zoom: 1 !important;
+  }
+
+  .live-editor {
+    zoom: 1 !important;
   }
 
   .markdown-body {
@@ -654,6 +687,95 @@ body {
   flex: none;
   color: #d1851a;
   font-size: 12px;
+}
+
+/* ---------- find bar (view-mode Ctrl+F) ---------- */
+
+.find-bar {
+  position: fixed;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(125, 125, 125, 0.35);
+  border-radius: 8px;
+  padding: 5px 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(6px);
+}
+
+.find-input {
+  width: 220px;
+  border: 1px solid rgba(125, 125, 125, 0.35);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  outline: none;
+  background: transparent;
+  color: inherit;
+}
+
+.find-input:focus {
+  border-color: #0969da;
+}
+
+.find-count {
+  font-size: 12px;
+  color: #57606a;
+  min-width: 52px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.find-btn {
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.find-btn:hover:not(:disabled) {
+  background: rgba(125, 125, 125, 0.2);
+}
+
+.find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+::highlight(md-find) {
+  background-color: rgba(255, 211, 61, 0.85);
+  color: #1a1a1a;
+}
+
+::highlight(md-find-current) {
+  background-color: #fb8500;
+  color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .find-bar {
+    background: rgba(22, 27, 34, 0.95);
+    border-color: rgba(240, 246, 252, 0.2);
+    color: #e6edf3;
+  }
+
+  .find-input {
+    border-color: rgba(240, 246, 252, 0.2);
+  }
+
+  .find-count {
+    color: #8b949e;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

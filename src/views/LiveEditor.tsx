@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { EditorView, keymap, lineNumbers } from '@codemirror/view'
+import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view'
 import { EditorState, Compartment } from '@codemirror/state'
 import { history, historyKeymap, defaultKeymap } from '@codemirror/commands'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
@@ -14,6 +14,10 @@ interface Props {
   dark: boolean
   onDirtyChange: (dirty: boolean) => void
   viewRef: React.MutableRefObject<EditorView | null>
+  /** Source offset the caret should start at (keeps view-mode scroll position). */
+  initialPos?: number
+  /** Document zoom factor (Ctrl+wheel). */
+  zoom?: number
 }
 
 const baseTheme = EditorView.theme({
@@ -24,13 +28,16 @@ const baseTheme = EditorView.theme({
     overflowY: 'auto',
   },
   '.cm-content': {
-    maxWidth: '916px',
     margin: '0 auto',
-    padding: '28px 16px 120px',
+    padding: '28px 48px 120px',
     caretColor: '#0969da',
   },
   '.cm-line': { padding: '0 4px' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftWidth: '2px', borderLeftColor: '#0969da' },
+  '.cm-cursor, .cm-dropCursor': {
+    borderLeftWidth: '2.5px',
+    borderLeftColor: '#0969da',
+    boxShadow: '0 0 4px rgba(9, 105, 218, 0.9)',
+  },
   '&.cm-focused': { outline: 'none' },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
     backgroundColor: 'rgba(84, 174, 255, 0.25) !important',
@@ -40,7 +47,7 @@ const baseTheme = EditorView.theme({
 const lightTheme = EditorView.theme({ '&': { color: '#1f2328' } }, { dark: false })
 const darkTheme = EditorView.theme({ '&': { color: '#e6edf3' } }, { dark: true })
 
-export default function LiveEditor({ content, dirSlash, dark, onDirtyChange, viewRef }: Props) {
+export default function LiveEditor({ content, dirSlash, dark, onDirtyChange, viewRef, initialPos = 0, zoom = 1 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const themeComp = useRef(new Compartment())
   const suppressDirty = useRef(false)
@@ -48,28 +55,58 @@ export default function LiveEditor({ content, dirSlash, dark, onDirtyChange, vie
   onDirtyRef.current = onDirtyChange
 
   useEffect(() => {
+    const anchor = Math.max(0, Math.min(initialPos, content.length))
     const view = new EditorView({
-      doc: content,
+      state: EditorState.create({
+        doc: content,
+        selection: { anchor },
+        extensions: [
+          baseTheme,
+          themeComp.current.of(dark ? darkTheme : lightTheme),
+          history(),
+          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          highlightSelectionMatches(),
+          EditorView.lineWrapping,
+        highlightActiveLine(),
+          markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: false }),
+          livePreview(dirSlash),
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged && !suppressDirty.current) onDirtyRef.current(true)
+          }),
+        ],
+      }),
       parent: hostRef.current!,
-      extensions: [
-        baseTheme,
-        themeComp.current.of(dark ? darkTheme : lightTheme),
-        history(),
-        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-        highlightSelectionMatches(),
-        EditorView.lineWrapping,
-        markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: false }),
-        livePreview(dirSlash),
-        EditorView.updateListener.of((u) => {
-          if (u.docChanged && !suppressDirty.current) onDirtyRef.current(true)
-        }),
-      ],
     })
     viewRef.current = view
-    view.focus()
+    ;(window as unknown as { __cmView?: EditorView | null }).__cmView = view
+    // scroll after the first layout measure — dispatching scrollIntoView on an
+    // unmeasured viewport scrolls to a guessed position; focusing first also
+    // fights the native focus-scroll, so dispatch then focus in the same frame.
+    // rAF can stall forever (occluded/minimized window) — keep a timer fallback.
+    const applyScroll = () => {
+      if (viewRef.current !== view) return
+      view.dispatch({
+        selection: { anchor },
+        effects: EditorView.scrollIntoView(anchor, { y: 'start' }),
+      })
+      view.focus()
+    }
+    let applied = false
+    const once = () => {
+      if (applied) return
+      applied = true
+      applyScroll()
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(once)
+    })
+    setTimeout(once, 80)
     return () => {
       view.destroy()
       viewRef.current = null
+      if ((window as unknown as { __cmView?: EditorView | null }).__cmView === view) {
+        ;(window as unknown as { __cmView?: EditorView | null }).__cmView = null
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -92,5 +129,5 @@ export default function LiveEditor({ content, dirSlash, dark, onDirtyChange, vie
     })
   }, [dark])
 
-  return <div ref={hostRef} className="live-editor" />
+  return <div ref={hostRef} className="live-editor" style={{ zoom }} />
 }
