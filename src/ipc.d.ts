@@ -1,9 +1,17 @@
+interface TabInfo {
+  path: string
+  stale?: boolean
+}
+
 interface ViewerBridge {
   onTabsChanged: (
-    cb: (data: { tabs: { path: string }[]; activePath: string | null }) => void,
+    cb: (data: { tabs: TabInfo[]; activePath: string | null }) => void,
   ) => () => void
   onContentUpdated: (cb: (data: { path: string; content: string }) => void) => () => void
-  getState: () => Promise<{ tabs: { path: string }[]; activePath: string | null }>
+  onFileChanged: (cb: (data: { path: string }) => void) => () => void
+  reloadTab: (path: string) => Promise<void>
+  dismissFileChanged: (path: string) => Promise<void>
+  getState: () => Promise<{ tabs: TabInfo[]; activePath: string | null }>
   getTabContent: (path: string) => Promise<string | null>
   activateTab: (path: string) => Promise<void>
   closeTab: (path: string) => Promise<void>

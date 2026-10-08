@@ -35,7 +35,7 @@ function tabOf(p) {
 
 function broadcastTabs() {
   win?.webContents.send('tabs-changed', {
-    tabs: openTabs.map((t) => ({ path: t.path })),
+    tabs: openTabs.map((t) => ({ path: t.path, stale: !!t.stale })),
     activePath,
   })
 }
@@ -64,9 +64,11 @@ function watchTab(p) {
         try {
           const content = await fsp.readFile(p, 'utf8')
           const tab = tabOf(p)
+          // Don't clobber the view: flag the tab as stale and let the user
+          // decide whether to reload (banner with reload/dismiss buttons).
           if (!tab || content === tab.content) return
-          tab.content = content
-          win?.webContents.send('content-updated', { path: p, content })
+          tab.stale = true
+          win?.webContents.send('file-changed', { path: p })
         } catch {
           /* file may be mid-save; retry on next event */
         }
@@ -98,17 +100,9 @@ async function openFile(filePath) {
   }
   const existing = tabOf(filePath)
   if (existing) {
+    // External changes surface as a stale banner (user decides), so activating
+    // an already-open tab must not silently refresh its content either.
     activePath = filePath
-    // refresh content in case it changed since it was last seen
-    try {
-      const content = await fsp.readFile(filePath, 'utf8')
-      if (content !== existing.content) {
-        existing.content = content
-        sendContent(filePath)
-      }
-    } catch {
-      /* keep cached content */
-    }
   } else {
     const content = await fsp.readFile(filePath, 'utf8').catch(() => '')
     openTabs.push({ path: filePath, content })
@@ -184,9 +178,28 @@ if (!gotLock) {
     })
 
     ipcMain.handle('get-state', () => ({
-      tabs: openTabs.map((t) => ({ path: t.path })),
+      tabs: openTabs.map((t) => ({ path: t.path, stale: !!t.stale })),
       activePath,
     }))
+    ipcMain.handle('reload-tab', async (_e, p) => {
+      const tab = tabOf(p)
+      if (typeof p !== 'string' || !tab) return
+      try {
+        const content = await fsp.readFile(p, 'utf8')
+        tab.content = content
+        tab.stale = false
+        broadcastTabs()
+        sendContent(p)
+      } catch {
+        /* keep cached content */
+      }
+    })
+    ipcMain.handle('dismiss-file-changed', (_e, p) => {
+      const tab = tabOf(p)
+      if (typeof p !== 'string' || !tab) return
+      tab.stale = false
+      broadcastTabs()
+    })
     ipcMain.handle('get-tab-content', (_e, p) => tabOf(p)?.content ?? null)
     ipcMain.handle('activate-tab', (_e, p) => {
       if (typeof p === 'string') activateTab(p)

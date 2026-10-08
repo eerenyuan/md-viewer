@@ -1,5 +1,6 @@
 export interface TabMeta {
   path: string
+  stale?: boolean
 }
 
 interface Props {
@@ -31,6 +32,7 @@ export default function TabBar({ tabs, activePath, onSelect, onClose }: Props) {
             {/\.excalidraw(\.md|\.json)?$/i.test(t.path) ? '◈' : 'M'}
           </span>
           <span className="tab-name">{baseName(t.path)}</span>
+          {t.stale && <span className="tab-stale" title="文件已被外部修改">↻</span>}
           <button
             className="tab-close"
             title="关闭 (Ctrl+W)"

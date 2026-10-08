@@ -11,6 +11,13 @@ contextBridge.exposeInMainWorld('viewer', {
     ipcRenderer.on('content-updated', listener)
     return () => ipcRenderer.removeListener('content-updated', listener)
   },
+  onFileChanged: (cb) => {
+    const listener = (_e, data) => cb(data)
+    ipcRenderer.on('file-changed', listener)
+    return () => ipcRenderer.removeListener('file-changed', listener)
+  },
+  reloadTab: (path) => ipcRenderer.invoke('reload-tab', path),
+  dismissFileChanged: (path) => ipcRenderer.invoke('dismiss-file-changed', path),
   getState: () => ipcRenderer.invoke('get-state'),
   getTabContent: (path) => ipcRenderer.invoke('get-tab-content', path),
   activateTab: (path) => ipcRenderer.invoke('activate-tab', path),

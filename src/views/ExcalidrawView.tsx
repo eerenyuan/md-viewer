@@ -3,10 +3,14 @@ import { Excalidraw } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import '@excalidraw/excalidraw/index.css'
 import { parseExcalidraw, serializeExcalidraw, buildFileContent } from '../lib/excalidraw'
+import StaleBanner from '../StaleBanner'
 
 interface Props {
   content: string
   fileName: string
+  stale: boolean
+  onReload: () => void
+  onDismiss: () => void
 }
 
 type SceneState =
@@ -18,7 +22,7 @@ function pickAppState(appState?: Record<string, unknown>) {
   return { viewBackgroundColor: appState?.viewBackgroundColor ?? '#ffffff' }
 }
 
-export default function ExcalidrawView({ content, fileName }: Props) {
+export default function ExcalidrawView({ content, fileName, stale, onReload, onDismiss }: Props) {
   const [dark, setDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [viewMode, setViewMode] = useState(true)
   const [dirty, setDirty] = useState(false)
@@ -105,6 +109,17 @@ export default function ExcalidrawView({ content, fileName }: Props) {
     setConfirmDiscard(false)
     latestRef.current = null
     setViewMode(true)
+  }
+
+  const handleStaleReload = () => {
+    if (!viewMode && dirty) {
+      // same contract as the markdown editor: reload drops unsaved edits
+      setDirty(false)
+      setConfirmDiscard(false)
+      latestRef.current = null
+      setViewMode(true)
+    }
+    onReload()
   }
 
   return (

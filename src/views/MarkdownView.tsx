@@ -6,10 +6,14 @@ import { parseExcalidraw } from '../lib/excalidraw'
 import { renderMermaid } from '../lib/mermaid'
 import { exportToSvg } from '@excalidraw/excalidraw'
 import TocPanel, { type TocHeading } from '../TocPanel'
+import StaleBanner from '../StaleBanner'
 
 interface Props {
   content: string
   filePath: string
+  stale: boolean
+  onReload: () => void
+  onDismiss: () => void
 }
 
 /** Resolve and inline-render every Excalidraw embed in the rendered container. */
@@ -160,7 +164,7 @@ function RenderedDoc({
   )
 }
 
-export default function MarkdownView({ content, filePath }: Props) {
+export default function MarkdownView({ content, filePath, stale, onReload, onDismiss }: Props) {
   const [mode, setMode] = useState<'view' | 'edit'>('view')
   const [dirty, setDirty] = useState(false)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
@@ -228,6 +232,17 @@ export default function MarkdownView({ content, filePath }: Props) {
     if (!r.ok && !r.canceled) window.alert('导出失败：' + (r.error ?? '未知错误'))
   }
 
+  const handleStaleReload = () => {
+    if (mode === 'edit') {
+      // the editor keeps showing the old buffer while dirty; a reload while
+      // dirty means dropping it and falling back to the (fresh) view mode
+      setDirty(false)
+      setConfirmDiscard(false)
+      setMode('view')
+    }
+    onReload()
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.defaultPrevented) return
@@ -283,6 +298,7 @@ export default function MarkdownView({ content, filePath }: Props) {
           </>
         )}
       </div>
+      {stale && <StaleBanner dirty={mode === 'edit' && dirty} onReload={handleStaleReload} onDismiss={onDismiss} />}
       {mode === 'view' && tocVisible && <TocPanel headings={toc} />}
       {mode === 'edit' ? (
         <LiveEditor

@@ -32,6 +32,7 @@ export default function App() {
   activePathRef.current = activePath
   const tabsRef = useRef<TabMeta[]>(tabs)
   tabsRef.current = tabs
+  const activeTab = tabs.find((t) => t.path === activePath)
 
   useEffect(() => {
     localStorage.setItem('theme', theme)
@@ -71,6 +72,9 @@ export default function App() {
       contentCache.current.set(path, content)
       if (activePathRef.current === path) setActiveContent(content)
     })
+    const offFileChanged = window.viewer.onFileChanged(({ path }) => {
+      setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, stale: true } : t)))
+    })
     window.viewer.getState().then(applyTabs)
 
     const onKey = (e: KeyboardEvent) => {
@@ -92,6 +96,7 @@ export default function App() {
     return () => {
       offTabs()
       offContent()
+      offFileChanged()
       window.removeEventListener('keydown', onKey)
     }
   }, [ensureContent])
@@ -137,9 +142,23 @@ export default function App() {
           </p>
         </div>
       ) : isExcalidraw(activePath) ? (
-        <ExcalidrawView key={activePath} content={activeContent} fileName={activePath} />
+        <ExcalidrawView
+          key={activePath}
+          content={activeContent}
+          fileName={activePath}
+          stale={activeTab?.stale ?? false}
+          onReload={() => void window.viewer.reloadTab(activePath)}
+          onDismiss={() => void window.viewer.dismissFileChanged(activePath)}
+        />
       ) : (
-        <MarkdownView key={activePath} content={activeContent} filePath={activePath} />
+        <MarkdownView
+          key={activePath}
+          content={activeContent}
+          filePath={activePath}
+          stale={activeTab?.stale ?? false}
+          onReload={() => void window.viewer.reloadTab(activePath)}
+          onDismiss={() => void window.viewer.dismissFileChanged(activePath)}
+        />
       )}
     </div>
   )

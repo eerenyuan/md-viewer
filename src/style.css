@@ -601,3 +601,76 @@ body {
   padding: 2px 6px;
   font-size: 0.9em;
 }
+
+/* ---------- stale banner (external file change) ---------- */
+
+.stale-banner {
+  position: fixed;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(640px, calc(100vw - 140px));
+  background: #fff8c5;
+  border: 1px solid #d4a72c;
+  color: #453700;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.stale-banner-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stale-banner-btn {
+  flex: none;
+  border: 1px solid rgba(125, 125, 125, 0.35);
+  background: rgba(255, 255, 255, 0.9);
+  color: #24292f;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stale-banner-btn.primary {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+}
+
+.stale-banner-btn:hover {
+  filter: brightness(0.95);
+}
+
+.tab-stale {
+  flex: none;
+  color: #d1851a;
+  font-size: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .stale-banner {
+    background: #292316;
+    border-color: #6e5a1e;
+    color: #e3b341;
+  }
+
+  .stale-banner-btn {
+    background: #12100c;
+    color: #e6edf3;
+    border-color: rgba(240, 246, 252, 0.2);
+  }
+
+  .stale-banner-btn.primary {
+    background: #1f6feb;
+    color: #fff;
+  }
+}
