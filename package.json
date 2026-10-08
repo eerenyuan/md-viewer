@@ -67,6 +67,7 @@
     "lz-string": "^1.5.0",
     "markdown-it": "^15.0.1",
     "markdown-it-anchor": "^10.0.0",
+    "markdown-it-cjk-friendly": "^3.0.0",
     "markdown-it-task-lists": "^2.1.1",
     "mermaid": "^11.17.2",
     "react": "^18.3.1",

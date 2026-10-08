@@ -3,6 +3,7 @@ import taskLists from 'markdown-it-task-lists'
 import { katex } from '@mdit/plugin-katex'
 import anchor from 'markdown-it-anchor'
 import hljs from 'highlight.js'
+import cjkFriendly from 'markdown-it-cjk-friendly'
 
 const md = new MarkdownIt({
   html: true,
@@ -18,6 +19,7 @@ const md = new MarkdownIt({
     return ''
   },
 })
+  .use(cjkFriendly)
   .use(taskLists)
   .use(katex)
   .use(anchor, {
