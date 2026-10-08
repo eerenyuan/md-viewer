@@ -3,8 +3,9 @@ import {
   Decoration,
   type DecorationSet,
   WidgetType,
+  keymap,
 } from '@codemirror/view'
-import { StateField, type Range, type EditorState } from '@codemirror/state'
+import { StateField, type Range, type EditorState, Prec } from '@codemirror/state'
 import { Text } from '@codemirror/state'
 import hljs from 'highlight.js'
 import { renderMarkdown, renderInline, toLocalFileUrl } from './markdown'
@@ -137,6 +138,7 @@ class BlockWidget extends WidgetType {
     readonly html: string,
     readonly blockStart: number,
     readonly dirSlash: string,
+    readonly blockText: string,
   ) {
     super()
   }
@@ -164,18 +166,58 @@ class BlockWidget extends WidgetType {
         })
     }
 
-    // clicking a rendered block puts the caret into its source
+    // clicking a rendered block puts the caret at the clicked character in its source
     wrap.addEventListener('mousedown', (e) => {
       e.preventDefault()
+      // our dispatch collapses this widget synchronously; if the event kept
+      // bubbling, CM6's own mousedown handler would re-map the (stale) click
+      // coords against the new layout and yank the caret away
+      e.stopPropagation()
+      // both blocks flip render/source form and the document height changes
+      // wildly — re-anchor the viewport on the caret, centered for visibility
+      // ("nearest" tends to park the caret at the screen edge)
+      const pos = this.posFromClick(view, e)
       view.dispatch({
-        selection: { anchor: Math.min(this.blockStart + 1, view.state.doc.length) },
-        scrollIntoView: true,
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'center' }),
       })
     })
     return wrap
   }
   ignoreEvent() {
     return false
+  }
+  /** Map the click point to a source offset: caretRangeFromPoint gives the
+   *  offset inside the rendered DOM; flatten-match it back over the block's
+   *  source (markup chars are skipped as noise). */
+  posFromClick(view: EditorView, e: MouseEvent): number {
+    const host = (e.currentTarget as HTMLElement) ?? null
+    const range = document.caretRangeFromPoint(e.clientX, e.clientY)
+    if (!host || !range || !host.contains(range.startContainer)) return this.blockStart
+    const pre = document.createRange()
+    pre.selectNodeContents(host)
+    try {
+      pre.setEnd(range.startContainer, range.startOffset)
+    } catch {
+      return this.blockStart
+    }
+    const rendered = pre.toString().replace(/\s+/g, '')
+    if (!rendered) return this.blockStart
+    const src = this.blockText
+    let i = 0
+    let j = 0
+    for (; i < src.length && j < rendered.length; i++) {
+      const ch = src[i]
+      if (/\s/.test(ch)) continue
+      if (ch === rendered[j]) {
+        j++
+        continue
+      }
+      // markup-ish source char with no rendered counterpart: skip it
+      if (/[#*_`~[\]()>|!+=."']/.test(ch)) continue
+      // unexpected mismatch: skip (best effort — stay near the click)
+    }
+    return Math.min(this.blockStart + i, view.state.doc.length)
   }
 }
 
@@ -197,6 +239,15 @@ function buildDecorations(state: EditorState, dirSlash: string, cache: Map<strin
   const blocks = analyzeBlocks(doc)
   const active = blocks.find((b) => sel >= b.from && sel <= b.to + 1)
 
+  // the active (source-form) block gets a soft background so the user can
+  // spot where they landed after a cross-block jump
+  if (active) {
+    for (let i = active.lineFrom; i <= active.lineTo; i++) {
+      const line = doc.line(i)
+      ranges.push(Decoration.line({ class: 'cm-active-block' }).range(line.from))
+    }
+  }
+
   for (const b of blocks) {
     if (b.kind === 'frontmatter') continue // keep front matter as plain source
     if (b === active) continue
@@ -204,7 +255,7 @@ function buildDecorations(state: EditorState, dirSlash: string, cache: Map<strin
     const to = Math.min(endLine.to + 1, doc.length) // swallow the trailing newline
     ranges.push(
       Decoration.replace({
-        widget: new BlockWidget(blockHtml(b), b.from, dirSlash),
+        widget: new BlockWidget(blockHtml(b), b.from, dirSlash, b.text),
         block: true,
         side: 1,
       }).range(b.from, to),
@@ -226,22 +277,133 @@ function buildDecorations(state: EditorState, dirSlash: string, cache: Map<strin
 }
 
 /**
+ * Vertical motion that is aware of rendered blocks: moving up/down across a
+ * block boundary lands on the visually-adjacent end of the target block
+ * (from below -> the block's last line; from above -> its first line), so the
+ * caret keeps visual continuity instead of always jumping to the block head.
+ */
+function blockAwareVerticalMotion(view: EditorView, dir: -1 | 1): boolean {
+  const sel = view.state.selection.main.head
+  const blocks = analyzeBlocks(view.state.doc)
+  const idx = blocks.findIndex((b) => sel >= b.from && sel <= b.to + 1)
+  if (idx === -1) return false
+  const active = blocks[idx]
+  const doc = view.state.doc
+  const line = doc.lineAt(sel)
+  const col = sel - line.from
+
+  // in-block multi-line motion: move between the block's source lines,
+  // keeping the column (native moveByLine misbehaves around atomic ranges)
+  const targetLineNo = dir === -1 ? line.number - 1 : line.number + 1
+  if (targetLineNo >= active.lineFrom && targetLineNo <= active.lineTo) {
+    const t = doc.line(targetLineNo)
+    view.dispatch({ selection: { anchor: t.from + Math.min(col, t.to - t.from) }, scrollIntoView: true })
+    return true
+  }
+
+  // crossing a block boundary: land on the visually-adjacent end of the
+  // target block (from below -> last line; from above -> first line)
+  const target = blocks[idx + dir]
+  if (!target || target.kind === 'frontmatter') return false
+  const pos = dir === -1 ? target.to : target.from
+  view.dispatch({
+    selection: { anchor: pos },
+    effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+  })
+  // the first dispatch lands while the target's widget range is still atomic,
+  // which pushes the caret to a block boundary; once the widget has collapsed
+  // (block became active) a second dispatch sticks at the exact position
+  view.dispatch({ selection: { anchor: pos } })
+  return true
+}
+
+/**
+ * Caret mapping for mouse clicks: CM6's precise posAtCoords is unreliable
+ * around collapsed block widgets (returns null, or a line-end position via
+ * its loose fallback). Locate the line by binary search over y, then the
+ * offset by x — monotonic in visual coordinates, so it stays correct.
+ */
+function posFromPointMapped(view: EditorView, x: number, y: number): number | null {
+  const doc = view.state.doc
+  let lo = 1
+  let hi = doc.lines
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    const c = view.coordsAtPos(doc.line(mid).from)
+    if (c && c.top <= y) lo = mid
+    else hi = mid - 1
+  }
+  const line = doc.line(lo)
+  let a = 0
+  let b = line.to - line.from
+  while (a < b) {
+    const mid = (a + b + 1) >> 1
+    const c = view.coordsAtPos(line.from + mid)
+    if (c && c.left <= x) a = mid
+    else b = mid - 1
+  }
+  return line.from + a
+}
+
+/**
  * The live-preview state field: renders inactive blocks as HTML widgets,
  * leaving the block containing the caret as editable source.
  * (Block replace decorations must come from a StateField, not a ViewPlugin.)
  */
 export function livePreview(dirSlash: string) {
   const cache = new Map<string, string>()
-  return StateField.define<DecorationSet>({
-    create(state) {
-      return buildDecorations(state, dirSlash, cache)
-    },
-    update(decos, tr) {
-      if (tr.docChanged || tr.selection) {
-        return buildDecorations(tr.state, dirSlash, cache)
-      }
-      return decos
-    },
-    provide: (field) => EditorView.decorations.from(field),
-  })
+  return [
+    StateField.define<DecorationSet>({
+      create(state) {
+        return buildDecorations(state, dirSlash, cache)
+      },
+      update(decos, tr) {
+        if (tr.docChanged || tr.selection) {
+          return buildDecorations(tr.state, dirSlash, cache)
+        }
+        return decos
+      },
+      provide: (field) => EditorView.decorations.from(field),
+    }),
+    Prec.highest(
+      EditorView.domEventHandlers({
+        mousedown(event: MouseEvent, view: EditorView) {
+          const target = event.target as HTMLElement | null
+          if (target?.closest('.cm-md-widget')) return false // widgets handle their own click
+          // plain single left-click only — shift-click (extend), double/triple
+          // click (select word/line) and modifiers stay with native behavior
+          if (
+            event.button !== 0 ||
+            event.detail > 1 ||
+            event.shiftKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.altKey
+          ) {
+            return false
+          }
+          // CM6's own precise mapping is unreliable around collapsed block
+          // widgets (returns null or a line-end position); map the click via
+          // our binary search instead
+          const pos = posFromPointMapped(view, event.clientX, event.clientY)
+          if (pos == null) return false
+          view.dispatch({ selection: { anchor: pos }, scrollIntoView: true })
+          view.focus()
+          return true
+        },
+      }),
+    ),
+    Prec.highest(
+      keymap.of([
+        {
+          key: 'ArrowUp',
+          run: (view) => blockAwareVerticalMotion(view, -1),
+        },
+        {
+          key: 'ArrowDown',
+          run: (view) => blockAwareVerticalMotion(view, 1),
+        },
+      ]),
+    ),
+  ]
 }
