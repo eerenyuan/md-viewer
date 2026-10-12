@@ -34,6 +34,7 @@ body {
 .app-root {
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 /* ---------- tab bar ---------- */
@@ -144,6 +145,31 @@ body {
 }
 
 /* content area fills the rest; views manage their own scrolling */
+.tab-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* keep-alive: hidden panes stay mounted AND keep their layout (absolute +
+   visibility instead of display:none — display:none destroys scroll offsets,
+   and Chromium may not restore them, nor fire scroll events, when the window
+   itself is occluded) */
+.tab-pane.keep {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.tab-pane > .md-scroll,
+.tab-pane > .excalidraw-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
 .app-root > .md-scroll,
 .app-root > .excalidraw-wrap,
 .app-root > .empty-state {

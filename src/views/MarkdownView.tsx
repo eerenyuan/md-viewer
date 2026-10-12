@@ -13,6 +13,7 @@ interface Props {
   content: string
   filePath: string
   stale: boolean
+  active: boolean
   onReload: () => void
   onDismiss: () => void
   onDirtyChange?: (dirty: boolean) => void
@@ -164,10 +165,14 @@ function attachCopyButtons(container: HTMLElement) {
 
 async function copyText(text: string): Promise<boolean> {
   try {
-    await navigator.clipboard.writeText(text)
+    // writeText can hang or reject when the window lost focus — race it
+    await Promise.race([
+      navigator.clipboard.writeText(text),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 1000)),
+    ])
     return true
   } catch {
-    /* sandboxed/permission edge — fall back to execCommand */
+    /* unfocused/hidden window or permission — fall back to execCommand */
   }
   try {
     const ta = document.createElement('textarea')
@@ -191,14 +196,31 @@ function RenderedDoc({
   onToc,
   bodyRef,
   zoom,
+  scrollHostRef,
+  savedScrollRef,
 }: {
   content: string
   dirSlash: string
   onToc: (headings: TocHeading[]) => void
   bodyRef: React.RefObject<HTMLDivElement | null>
   zoom: number
+  scrollHostRef: React.MutableRefObject<HTMLDivElement | null>
+  savedScrollRef: React.MutableRefObject<number>
 }) {
   const html = useMemo(() => renderMarkdown(content), [content])
+  const isFirstHtml = useRef(true)
+
+  // record scroll continuously via a NATIVE listener — React's synthetic
+  // onScroll never fires for programmatic scrollTop assignment
+  useEffect(() => {
+    const host = scrollHostRef.current
+    if (!host) return
+    const onScroll = () => {
+      savedScrollRef.current = host.scrollTop
+    }
+    host.addEventListener('scroll', onScroll, { passive: true })
+    return () => host.removeEventListener('scroll', onScroll)
+  }, [])
 
   useEffect(() => {
     const el = bodyRef.current
@@ -241,15 +263,28 @@ function RenderedDoc({
       .filter((h) => h.id)
       .map((h) => ({ id: h.id, text: h.textContent ?? '', level: Number(h.tagName[1]) }))
     onToc(headings)
+
+    // content swap (e.g. external reload): restore the recorded offset so the
+    // reading position survives. The very first render skips this — its
+    // rAF-restore would run after user/app scrolling and stomp it with 0.
+    const top = savedScrollRef.current
+    if (isFirstHtml.current) {
+      isFirstHtml.current = false
+    } else {
+      requestAnimationFrame(() => {
+        const host = scrollHostRef.current
+        if (host) host.scrollTop = top
+      })
+    }
   }, [html, dirSlash])
   return (
-    <div className="md-scroll" style={{ zoom }}>
+    <div className="md-scroll" style={{ zoom }} ref={scrollHostRef}>
       <div ref={bodyRef} className="markdown-body" />
     </div>
   )
 }
 
-export default function MarkdownView({ content, filePath, stale, onReload, onDismiss, onDirtyChange }: Props) {
+export default function MarkdownView({ content, filePath, stale, active, onReload, onDismiss, onDirtyChange }: Props) {
   const [mode, setMode] = useState<'view' | 'edit'>('view')
   const [dirty, setDirty] = useState(false)
   const changeDirty = (d: boolean) => {
@@ -274,6 +309,10 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
   })
   const cmRef = useRef<EditorView | null>(null)
   const savedRef = useRef(content)
+  // keep-alive panes: record scroll continuously, restore when the pane
+  // becomes visible again (display:none may or may not preserve it)
+  const savedScrollRef = useRef(0)
+  const scrollHostRef = useRef<HTMLDivElement | null>(null)
 
   const dirSlash = useMemo(() => {
     const idx = filePath.replace(/\\/g, '/').lastIndexOf('/')
@@ -295,10 +334,12 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
     localStorage.setItem('zoom', String(zoom))
   }, [zoom])
 
-  // Ctrl+wheel adjusts document zoom (50%–250%), Ctrl+0 resets
+  // Ctrl+wheel adjusts document zoom (50%–250%), Ctrl+0 resets.
+  // Key handlers are gated on `active` — every tab pane stays mounted, so
+  // hidden panes must not react to window-level shortcuts.
   useEffect(() => {
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey) return
+      if (!active || !e.ctrlKey) return
       e.preventDefault()
       setZoom((z) => {
         const next = z * (e.deltaY < 0 ? 1.1 : 1 / 1.1)
@@ -306,6 +347,7 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
       })
     }
     const onZoomKey = (e: KeyboardEvent) => {
+      if (!active) return
       if (e.ctrlKey && e.key === '0') {
         e.preventDefault()
         setZoom(1)
@@ -317,7 +359,32 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
       window.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onZoomKey)
     }
-  }, [])
+  }, [active])
+
+  // pane becomes visible again -> put the scroll offset back into whichever
+  // scroller is currently mounted (view mode or edit mode)
+  // keep-alive scroll capture/restore. Hidden panes use absolute+visibility
+  // (NOT display:none), so the scroller layout — and its offset — always
+  // exists: capture on hide, restore on re-show.
+  useEffect(() => {
+    if (active) {
+      const top = savedScrollRef.current
+      const apply = () => {
+        const md = scrollHostRef.current
+        if (md) md.scrollTop = top
+        const cm = cmRef.current?.dom.querySelector('.cm-scroller')
+        if (cm) cm.scrollTop = top
+      }
+      requestAnimationFrame(apply)
+      const t = setTimeout(apply, 80)
+      return () => clearTimeout(t)
+    }
+    // became hidden: read the real offset from the still-laid-out scroller
+    const md = scrollHostRef.current
+    if (md) savedScrollRef.current = md.scrollTop
+    const cm = cmRef.current?.dom.querySelector('.cm-scroller')
+    if (cm) savedScrollRef.current = cm.scrollTop
+  }, [active])
 
   const enterEditMode = () => {
     savedRef.current = content
@@ -371,7 +438,7 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.defaultPrevented) return
+      if (!active || !e.ctrlKey || e.defaultPrevented) return
       if (e.key.toLowerCase() === 'e') {
         e.preventDefault()
         if (mode === 'view') enterEditMode()
@@ -451,9 +518,20 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
           viewRef={cmRef}
           initialPos={editorAnchor}
           zoom={zoom}
+          onScrollTop={(top) => {
+            savedScrollRef.current = top
+          }}
         />
       ) : (
-        <RenderedDoc content={content} dirSlash={dirSlash} onToc={setToc} bodyRef={docRef} zoom={zoom} />
+        <RenderedDoc
+          content={content}
+          dirSlash={dirSlash}
+          onToc={setToc}
+          bodyRef={docRef}
+          zoom={zoom}
+          scrollHostRef={scrollHostRef}
+          savedScrollRef={savedScrollRef}
+        />
       )}
     </>
   )

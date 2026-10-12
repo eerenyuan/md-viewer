@@ -20,12 +20,13 @@ protocol.registerSchemesAsPrivileged([
   },
 ])
 
-let win = null
-let openTabs = [] // [{ path, content }]
-let activePath = null
-const watchers = new Map() // path -> { watcher, timer }
+// Multi-window: every window owns an independent tab set. `lastFocusedId`
+// routes files opened externally (double-click / second instance).
+const wins = new Map() // id -> { win, openTabs, activePath }
+let lastFocusedId = null
+const watchers = new Map() // path -> { watcher, timer, refs: Set<number> }
 
-// --- session persistence: restore the last open tabs on launch ---
+// --- session persistence: restore open tabs per window on launch ---
 
 function sessionFile() {
   return path.join(app.getPath('userData'), 'session.json')
@@ -35,146 +36,20 @@ function saveSession() {
   try {
     fs.writeFileSync(
       sessionFile(),
-      JSON.stringify({ tabs: openTabs.map((t) => t.path), activePath }),
+      JSON.stringify({
+        windows: [...wins.values()].map((w) => ({
+          tabs: w.openTabs.map((t) => t.path),
+          activePath: w.activePath,
+        })),
+      }),
     )
   } catch {
     /* best-effort */
   }
 }
 
-async function restoreSession() {
-  let data
-  try {
-    data = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
-  } catch {
-    return
-  }
-  if (!Array.isArray(data.tabs)) return
-  for (const p of data.tabs) {
-    if (typeof p === 'string') await openFile(p) // skips files that no longer exist
-  }
-  if (typeof data.activePath === 'string' && tabOf(data.activePath)) {
-    activateTab(data.activePath)
-  }
-}
-
-function extractFileArg(argv) {
-  return argv.find((a) => SUPPORTED.test(a) && !a.startsWith('-') && !a.startsWith('local-file'))
-}
-
-function tabOf(p) {
-  return openTabs.find((t) => t.path === p)
-}
-
-function broadcastTabs() {
-  saveSession()
-  win?.webContents.send('tabs-changed', {
-    tabs: openTabs.map((t) => ({ path: t.path, stale: !!t.stale })),
-    activePath,
-  })
-}
-
-function sendContent(p) {
-  const tab = tabOf(p)
-  if (tab) win?.webContents.send('content-updated', { path: p, content: tab.content })
-}
-
-function syncTitle() {
-  if (win && !win.isDestroyed()) {
-    const tab = tabOf(activePath)
-    win.setTitle(tab ? `${path.basename(tab.path)} - MD Viewer` : 'MD Viewer')
-  }
-}
-
-function watchTab(p) {
-  if (watchers.has(p)) return
-  const dir = path.dirname(p)
-  const base = path.basename(p)
-  try {
-    const watcher = fs.watch(dir, (_event, filename) => {
-      if (filename && path.basename(filename) !== base) return
-      clearTimeout(watchers.get(p)?.timer)
-      const timer = setTimeout(async () => {
-        try {
-          const content = await fsp.readFile(p, 'utf8')
-          const tab = tabOf(p)
-          // Don't clobber the view: flag the tab as stale and let the user
-          // decide whether to reload (banner with reload/dismiss buttons).
-          if (!tab || content === tab.content) return
-          tab.stale = true
-          win?.webContents.send('file-changed', { path: p })
-        } catch {
-          /* file may be mid-save; retry on next event */
-        }
-      }, 250)
-      const entry = watchers.get(p)
-      if (entry) entry.timer = timer
-    })
-    watchers.set(p, { watcher, timer: null })
-  } catch {
-    /* watch is best-effort */
-  }
-}
-
-function unwatchTab(p) {
-  const entry = watchers.get(p)
-  if (entry) {
-    clearTimeout(entry.timer)
-    entry.watcher.close()
-    watchers.delete(p)
-  }
-}
-
-async function openFile(filePath) {
-  try {
-    filePath = path.resolve(filePath)
-    await fsp.access(filePath)
-  } catch {
-    return
-  }
-  const existing = tabOf(filePath)
-  if (existing) {
-    // External changes surface as a stale banner (user decides), so activating
-    // an already-open tab must not silently refresh its content either.
-    activePath = filePath
-  } else {
-    const content = await fsp.readFile(filePath, 'utf8').catch(() => '')
-    openTabs.push({ path: filePath, content })
-    activePath = filePath
-    watchTab(filePath)
-  }
-  broadcastTabs()
-  sendContent(activePath)
-  syncTitle()
-  if (win && !win.isDestroyed()) {
-    if (win.isMinimized()) win.restore()
-    win.focus()
-  }
-}
-
-function activateTab(p) {
-  if (!tabOf(p)) return
-  activePath = p
-  broadcastTabs()
-  sendContent(p)
-  syncTitle()
-}
-
-function closeTab(p) {
-  const idx = openTabs.findIndex((t) => t.path === p)
-  if (idx === -1) return
-  openTabs.splice(idx, 1)
-  unwatchTab(p)
-  if (activePath === p) {
-    activePath = openTabs[Math.min(idx, openTabs.length - 1)]?.path ?? null
-  }
-  broadcastTabs()
-  if (activePath) sendContent(activePath)
-  syncTitle()
-}
-
 function createWindow() {
-  win = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1100,
     height: 800,
     autoHideMenuBar: true,
@@ -187,8 +62,185 @@ function createWindow() {
       sandbox: true,
     },
   })
+  const id = win.id
+  wins.set(id, { win, openTabs: [], activePath: null })
+  win.on('focus', () => {
+    lastFocusedId = id
+  })
+  win.on('closed', () => {
+    const w = wins.get(id)
+    if (w) {
+      for (const t of w.openTabs) unwatchTab(id, t.path)
+      wins.delete(id)
+    }
+    if (lastFocusedId === id) lastFocusedId = null
+    saveSession()
+  })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html')).catch(() => {})
+  lastFocusedId = id
+  return id
+}
+
+function entryOf(id) {
+  return wins.get(id)
+}
+
+function tabOf(id, p) {
+  return wins.get(id)?.openTabs.find((t) => t.path === p)
+}
+
+function broadcastTabs(id) {
+  const w = wins.get(id)
+  w?.win?.webContents.send('tabs-changed', {
+    tabs: w.openTabs.map((t) => ({ path: t.path, stale: !!t.stale })),
+    activePath: w.activePath,
+  })
+  saveSession()
+}
+
+function sendContent(id, p) {
+  const tab = tabOf(id, p)
+  if (tab) wins.get(id)?.win?.webContents.send('content-updated', { path: p, content: tab.content })
+}
+
+function syncTitle(id) {
+  const w = wins.get(id)
+  if (w && w.win && !w.win.isDestroyed()) {
+    const tab = w.openTabs.find((t) => t.path === w.activePath)
+    w.win.setTitle(tab ? `${path.basename(tab.path)} - MD Viewer` : 'MD Viewer')
+  }
+}
+
+function watchTab(id, p) {
+  let entry = watchers.get(p)
+  if (entry) {
+    entry.refs.add(id)
+    return
+  }
+  const dir = path.dirname(p)
+  const base = path.basename(p)
+  try {
+    const watcher = fs.watch(dir, (_event, filename) => {
+      if (filename && path.basename(filename) !== base) return
+      clearTimeout(watchers.get(p)?.timer)
+      const timer = setTimeout(async () => {
+        try {
+          const content = await fsp.readFile(p, 'utf8')
+          // flag the tab as stale in every window that has it open and let
+          // each user decide whether to reload (banner with reload/dismiss)
+          for (const [wid, w] of wins) {
+            const tab = w.openTabs.find((t) => t.path === p)
+            if (tab && content !== tab.content) {
+              tab.stale = true
+              w.win?.webContents.send('file-changed', { path: p })
+            }
+          }
+        } catch {
+          /* file may be mid-save; retry on next event */
+        }
+      }, 250)
+      const cur = watchers.get(p)
+      if (cur) cur.timer = timer
+    })
+    entry = { watcher, timer: null, refs: new Set([id]) }
+    watchers.set(p, entry)
+  } catch {
+    /* watch is best-effort */
+  }
+}
+
+function unwatchTab(id, p) {
+  const entry = watchers.get(p)
+  if (!entry) return
+  entry.refs.delete(id)
+  if (entry.refs.size === 0) {
+    clearTimeout(entry.timer)
+    entry.watcher.close()
+    watchers.delete(p)
+  }
+}
+
+async function openFile(filePath, targetId) {
+  const id =
+    targetId ?? lastFocusedId ?? (wins.size ? [...wins.keys()][0] : createWindow())
+  try {
+    filePath = path.resolve(filePath)
+    await fsp.access(filePath)
+  } catch {
+    return
+  }
+  const w = entryOf(id)
+  if (!w) return
+  const existing = w.openTabs.find((t) => t.path === filePath)
+  if (existing) {
+    // External changes surface as a stale banner (user decides), so activating
+    // an already-open tab must not silently refresh its content either.
+    w.activePath = filePath
+  } else {
+    const content = await fsp.readFile(filePath, 'utf8').catch(() => '')
+    w.openTabs.push({ path: filePath, content })
+    w.activePath = filePath
+    watchTab(id, filePath)
+  }
+  broadcastTabs(id)
+  sendContent(id, w.activePath)
+  syncTitle(id)
+  if (w.win && !w.win.isDestroyed()) {
+    if (w.win.isMinimized()) w.win.restore()
+    w.win.focus()
+  }
+}
+
+function activateTab(id, p) {
+  const w = entryOf(id)
+  if (!w || !w.openTabs.find((t) => t.path === p)) return
+  w.activePath = p
+  broadcastTabs(id)
+  sendContent(id, p)
+  syncTitle(id)
+}
+
+function closeTab(id, p) {
+  const w = entryOf(id)
+  if (!w) return
+  const idx = w.openTabs.findIndex((t) => t.path === p)
+  if (idx === -1) return
+  w.openTabs.splice(idx, 1)
+  unwatchTab(id, p)
+  if (w.activePath === p) {
+    w.activePath = w.openTabs[Math.min(idx, w.openTabs.length - 1)]?.path ?? null
+  }
+  broadcastTabs(id)
+  if (w.activePath) sendContent(id, w.activePath)
+  syncTitle(id)
+}
+
+async function restoreSession() {
+  let data
+  try {
+    data = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
+  } catch {
+    return
+  }
+  // accept both the new multi-window format and the legacy single-window one
+  const windows = Array.isArray(data.windows)
+    ? data.windows
+    : Array.isArray(data.tabs)
+      ? [{ tabs: data.tabs, activePath: data.activePath }]
+      : []
+  let first = true
+  for (const wdata of windows) {
+    if (!Array.isArray(wdata?.tabs) || wdata.tabs.length === 0) continue
+    const id = first ? [...wins.keys()][0] : createWindow()
+    first = false
+    for (const p of wdata.tabs) {
+      if (typeof p === 'string') await openFile(p, id) // skips files that no longer exist
+    }
+    if (typeof wdata.activePath === 'string' && tabOf(id, wdata.activePath)) {
+      activateTab(id, wdata.activePath)
+    }
+  }
 }
 
 const gotLock = app.requestSingleInstanceLock()
@@ -198,9 +250,13 @@ if (!gotLock) {
   app.on('second-instance', (_e, argv) => {
     const f = extractFileArg(argv)
     if (f) openFile(f)
-    else if (win && !win.isDestroyed()) {
-      if (win.isMinimized()) win.restore()
-      win.focus()
+    else {
+      const id = lastFocusedId ?? (wins.size ? [...wins.keys()][0] : createWindow())
+      const w = entryOf(id)
+      if (w?.win && !w.win.isDestroyed()) {
+        if (w.win.isMinimized()) w.win.restore()
+        w.win.focus()
+      }
     }
   })
 
@@ -211,41 +267,71 @@ if (!gotLock) {
       return net.fetch(pathToFileURL(p).toString())
     })
 
-    ipcMain.handle('get-state', () => ({
-      tabs: openTabs.map((t) => ({ path: t.path, stale: !!t.stale })),
-      activePath,
-    }))
-    ipcMain.handle('reload-tab', async (_e, p) => {
-      const tab = tabOf(p)
+    ipcMain.handle('get-state', (e) => {
+      const w = entryOf(e.sender.id)
+      return w
+        ? { tabs: w.openTabs.map((t) => ({ path: t.path, stale: !!t.stale })), activePath: w.activePath }
+        : { tabs: [], activePath: null }
+    })
+    ipcMain.handle('reload-tab', async (e, p) => {
+      const id = e.sender.id
+      const tab = tabOf(id, p)
       if (typeof p !== 'string' || !tab) return
       try {
         const content = await fsp.readFile(p, 'utf8')
         tab.content = content
         tab.stale = false
-        broadcastTabs()
-        sendContent(p)
+        broadcastTabs(id)
+        sendContent(id, p)
       } catch {
         /* keep cached content */
       }
     })
-    ipcMain.handle('dismiss-file-changed', (_e, p) => {
-      const tab = tabOf(p)
+    ipcMain.handle('dismiss-file-changed', (e, p) => {
+      const id = e.sender.id
+      const tab = tabOf(id, p)
       if (typeof p !== 'string' || !tab) return
       tab.stale = false
-      broadcastTabs()
+      broadcastTabs(id)
     })
-    ipcMain.handle('get-tab-content', (_e, p) => tabOf(p)?.content ?? null)
-    ipcMain.handle('activate-tab', (_e, p) => {
-      if (typeof p === 'string') activateTab(p)
+    ipcMain.handle('get-tab-content', (e, p) => tabOf(e.sender.id, p)?.content ?? null)
+    ipcMain.handle('activate-tab', (e, p) => {
+      if (typeof p === 'string') activateTab(e.sender.id, p)
     })
-    ipcMain.handle('close-tab', (_e, p) => {
-      if (typeof p === 'string') closeTab(p)
+    ipcMain.handle('close-tab', (e, p) => {
+      if (typeof p === 'string') closeTab(e.sender.id, p)
     })
-    ipcMain.handle('rename-file', async (_e, oldPath, newName) => {
+    ipcMain.handle('open-new-window', () => {
+      createWindow()
+    })
+    ipcMain.handle('open-path', (e, filePath) => {
+      if (typeof filePath === 'string' && SUPPORTED.test(filePath)) openFile(filePath, e.sender.id)
+    })
+    ipcMain.handle('set-theme-source', (_e, src) => {
+      if (['system', 'light', 'dark'].includes(src)) nativeTheme.themeSource = src
+    })
+    ipcMain.handle('save-file', async (e, filePath, content) => {
+      if (typeof filePath !== 'string' || typeof content !== 'string') {
+        return { ok: false, error: 'bad args' }
+      }
+      try {
+        await fsp.writeFile(filePath, content, 'utf8')
+        // the tab cache follows in every window showing this file
+        for (const [, w] of wins) {
+          const tab = w.openTabs.find((t) => t.path === filePath)
+          if (tab) tab.content = content
+        }
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: String(err) }
+      }
+    })
+    ipcMain.handle('rename-file', async (e, oldPath, newName) => {
+      const id = e.sender.id
       if (typeof oldPath !== 'string' || typeof newName !== 'string') {
         return { ok: false, error: 'bad args' }
       }
-      const tab = tabOf(oldPath)
+      const tab = tabOf(id, oldPath)
       if (!tab) return { ok: false, error: 'tab not found' }
       const name = newName.trim()
       if (!name || name === '.' || name === '..' || /[\\/:*?"<>|]/.test(name)) {
@@ -268,46 +354,34 @@ if (!gotLock) {
       } catch (err) {
         return { ok: false, error: String(err) }
       }
-      tab.path = newPath
-      unwatchTab(oldPath)
-      watchTab(newPath)
-      if (activePath === oldPath) activePath = newPath
-      broadcastTabs()
-      sendContent(newPath)
-      syncTitle()
+      // migrate the tab in every window that has this file open
+      for (const [wid, w] of wins) {
+        const t = w.openTabs.find((x) => x.path === oldPath)
+        if (!t) continue
+        t.path = newPath
+        unwatchTab(wid, oldPath)
+        watchTab(wid, newPath)
+        if (w.activePath === oldPath) w.activePath = newPath
+        broadcastTabs(wid)
+        sendContent(wid, newPath)
+        syncTitle(wid)
+      }
       return { ok: true, path: newPath }
     })
-    ipcMain.handle('open-path', (_e, filePath) => {
-      if (typeof filePath === 'string' && SUPPORTED.test(filePath)) openFile(filePath)
-    })
-    ipcMain.handle('set-theme-source', (_e, src) => {
-      if (['system', 'light', 'dark'].includes(src)) nativeTheme.themeSource = src
-    })
-    ipcMain.handle('save-file', async (_e, filePath, content) => {
-      if (typeof filePath !== 'string' || typeof content !== 'string') {
-        return { ok: false, error: 'bad args' }
-      }
+    ipcMain.handle('export-pdf', async (e, opts) => {
+      const id = e.sender.id
+      const w = entryOf(id)
+      if (!w || w.win.isDestroyed()) return { ok: false, error: 'no window' }
       try {
-        await fsp.writeFile(filePath, content, 'utf8')
-        const tab = tabOf(filePath)
-        if (tab) tab.content = content
-        return { ok: true }
-      } catch (err) {
-        return { ok: false, error: String(err) }
-      }
-    })
-    ipcMain.handle('export-pdf', async (_e, opts) => {
-      if (!win || win.isDestroyed()) return { ok: false, error: 'no window' }
-      try {
-        const pdf = await win.webContents.printToPDF({
+        const pdf = await e.sender.printToPDF({
           printBackground: true,
           pageSize: 'A4',
           margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 },
         })
         let target = typeof opts?.autoPath === 'string' ? opts.autoPath : null
         if (!target) {
-          const base = activePath ? path.basename(activePath).replace(/\.[^.]+$/, '') : 'document'
-          const r = await dialog.showSaveDialog(win, {
+          const base = w.activePath ? path.basename(w.activePath).replace(/\.[^.]+$/, '') : 'document'
+          const r = await dialog.showSaveDialog(w.win, {
             title: '导出 PDF',
             defaultPath: `${base}.pdf`,
             filters: [{ name: 'PDF', extensions: ['pdf'] }],
@@ -361,10 +435,10 @@ if (!gotLock) {
 
     createWindow()
 
-    // File passed on the command line (double-click / "open with"); otherwise
-    // bring back the tabs from the previous session
+    // File passed on the command line (double-click / "open with") goes to the
+    // initial window; otherwise bring back the tabs from the previous session
     const cli = extractFileArg(process.argv)
-    if (cli) openFile(cli)
+    if (cli) await openFile(cli, [...wins.keys()][0])
     else await restoreSession()
 
     app.on('activate', () => {
@@ -377,4 +451,8 @@ if (!gotLock) {
     watchers.clear()
     app.quit()
   })
+}
+
+function extractFileArg(argv) {
+  return argv.find((a) => SUPPORTED.test(a) && !a.startsWith('-') && !a.startsWith('local-file'))
 }

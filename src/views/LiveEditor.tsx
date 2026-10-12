@@ -18,6 +18,8 @@ interface Props {
   initialPos?: number
   /** Document zoom factor (Ctrl+wheel). */
   zoom?: number
+  /** Reports the editor scroller's offset so keep-alive can restore it. */
+  onScrollTop?: (top: number) => void
 }
 
 const baseTheme = EditorView.theme({
@@ -47,12 +49,14 @@ const baseTheme = EditorView.theme({
 const lightTheme = EditorView.theme({ '&': { color: '#1f2328' } }, { dark: false })
 const darkTheme = EditorView.theme({ '&': { color: '#e6edf3' } }, { dark: true })
 
-export default function LiveEditor({ content, dirSlash, dark, onDirtyChange, viewRef, initialPos = 0, zoom = 1 }: Props) {
+export default function LiveEditor({ content, dirSlash, dark, onDirtyChange, viewRef, initialPos = 0, zoom = 1, onScrollTop }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const themeComp = useRef(new Compartment())
   const suppressDirty = useRef(false)
   const onDirtyRef = useRef(onDirtyChange)
   onDirtyRef.current = onDirtyChange
+  const onScrollTopRef = useRef(onScrollTop)
+  onScrollTopRef.current = onScrollTop
 
   useEffect(() => {
     const anchor = Math.max(0, Math.min(initialPos, content.length))
@@ -70,6 +74,11 @@ export default function LiveEditor({ content, dirSlash, dark, onDirtyChange, vie
         highlightActiveLine(),
           markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: false }),
           livePreview(dirSlash),
+          EditorView.domEventHandlers({
+            scroll: (e) => {
+              onScrollTopRef.current?.((e.currentTarget as HTMLElement).scrollTop)
+            },
+          }),
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !suppressDirty.current) onDirtyRef.current(true)
           }),

@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('viewer', {
   closeTab: (path) => ipcRenderer.invoke('close-tab', path),
   renameFile: (oldPath, newName) => ipcRenderer.invoke('rename-file', oldPath, newName),
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
+  openNewWindow: () => ipcRenderer.invoke('open-new-window'),
   pathForFile: (file) => webUtils.getPathForFile(file),
   setThemeSource: (source) => ipcRenderer.invoke('set-theme-source', source),
   saveFile: (filePath, content) => ipcRenderer.invoke('save-file', filePath, content),

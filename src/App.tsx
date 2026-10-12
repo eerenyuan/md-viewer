@@ -21,8 +21,8 @@ const THEME_TITLE: Record<Theme, string> = {
 export default function App() {
   const [tabs, setTabs] = useState<TabMeta[]>([])
   const [activePath, setActivePath] = useState<string | null>(null)
-  const [activeContent, setActiveContent] = useState('')
-  const [activeDirty, setActiveDirty] = useState(false)
+  const [contents, setContents] = useState<Record<string, string>>({})
+  const [dirtyMap, setDirtyMap] = useState<Record<string, boolean>>({})
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const renamingPathRef = useRef<string | null>(null)
   renamingPathRef.current = renamingPath
@@ -34,14 +34,16 @@ export default function App() {
   const contentCache = useRef(new Map<string, string>())
   const activePathRef = useRef<string | null>(null)
   activePathRef.current = activePath
-  const activeDirtyRef = useRef(false)
-  activeDirtyRef.current = activeDirty
+  const dirtyMapRef = useRef<Record<string, boolean>>({})
+  dirtyMapRef.current = dirtyMap
   const tabsRef = useRef<TabMeta[]>(tabs)
   tabsRef.current = tabs
-  const activeTab = tabs.find((t) => t.path === activePath)
+  const activeDirty = !!activePath && !!dirtyMap[activePath]
+  const activeDirtyRef = useRef(false)
+  activeDirtyRef.current = activeDirty
 
   const startRename = useCallback((p: string) => {
-    if (p === activePathRef.current && activeDirtyRef.current) {
+    if (p === activePathRef.current && dirtyMapRef.current[p]) {
       window.alert('有未保存的修改，请先保存后再重命名')
       return
     }
@@ -54,6 +56,13 @@ export default function App() {
     if (!clean) return
     const r = await window.viewer.renameFile(p, clean)
     if (!r.ok) window.alert('重命名失败：' + (r.error ?? '未知错误'))
+    else setDirtyMap((m) => {
+      if (!(p in m)) return m
+      const next = { ...m }
+      next[r.path ?? p] = next[p] ?? false
+      delete next[p]
+      return next
+    })
   }, [])
 
   useEffect(() => {
@@ -61,20 +70,22 @@ export default function App() {
     window.viewer.setThemeSource(theme)
   }, [theme])
 
-  const ensureContent = useCallback(async (p: string | null) => {
-    if (!p) {
-      setActiveContent('')
-      return
-    }
-    const cached = contentCache.current.get(p)
-    if (cached !== undefined) {
-      setActiveContent(cached)
-      return
-    }
-    const c = await window.viewer.getTabContent(p)
-    if (c != null) {
-      contentCache.current.set(p, c)
-      if (activePathRef.current === p) setActiveContent(c)
+  // keep every tab's content in state — all panes stay mounted (keep-alive),
+  // so scroll position, edit buffers and find/TOC state survive tab switches
+  const ensureContents = useCallback(async (paths: string[]) => {
+    const missing = paths.filter((p) => !contentCache.current.has(p))
+    if (missing.length === 0) return
+    const entries = await Promise.all(
+      missing.map(async (p) => [p, await window.viewer.getTabContent(p)] as const),
+    )
+    const got = entries.filter(([, c]) => c != null) as [string, string][]
+    for (const [p, c] of got) contentCache.current.set(p, c)
+    if (got.length) {
+      setContents((prev) => {
+        const next = { ...prev }
+        for (const [p, c] of got) next[p] = c
+        return next
+      })
     }
   }, [])
 
@@ -86,14 +97,13 @@ export default function App() {
       }
       setTabs(data.tabs)
       setActivePath(data.activePath)
-      setActiveDirty(false)
-      void ensureContent(data.activePath)
+      void ensureContents(data.tabs.map((t) => t.path))
     }
 
     const offTabs = window.viewer.onTabsChanged(applyTabs)
     const offContent = window.viewer.onContentUpdated(({ path, content }) => {
       contentCache.current.set(path, content)
-      if (activePathRef.current === path) setActiveContent(content)
+      setContents((prev) => ({ ...prev, [path]: content }))
     })
     const offFileChanged = window.viewer.onFileChanged(({ path }) => {
       setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, stale: true } : t)))
@@ -110,6 +120,11 @@ export default function App() {
         return
       }
       if (!e.ctrlKey) return
+      if (e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        void window.viewer.openNewWindow()
+        return
+      }
       if (e.key === 'Tab') {
         e.preventDefault()
         const paths = tabsRef.current.map((t) => t.path)
@@ -130,7 +145,7 @@ export default function App() {
       offFileChanged()
       window.removeEventListener('keydown', onKey)
     }
-  }, [ensureContent, startRename])
+  }, [ensureContents, startRename])
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault()
@@ -167,7 +182,39 @@ export default function App() {
       >
         {THEME_ICON[theme]}
       </button>
-      {!activePath ? (
+      {tabs.map((t) => {
+        const content = contents[t.path] ?? ''
+        return (
+          <div key={t.path} className={`tab-pane ${t.path === activePath ? 'active' : 'keep'}`}>
+            {isExcalidraw(t.path) ? (
+              <ExcalidrawView
+                content={content}
+                fileName={t.path}
+                stale={t.stale ?? false}
+                active={t.path === activePath}
+                onReload={() => void window.viewer.reloadTab(t.path)}
+                onDismiss={() => void window.viewer.dismissFileChanged(t.path)}
+                onDirtyChange={(d) =>
+                  setDirtyMap((m) => (m[t.path] === d ? m : { ...m, [t.path]: d }))
+                }
+              />
+            ) : (
+              <MarkdownView
+                content={content}
+                filePath={t.path}
+                stale={t.stale ?? false}
+                active={t.path === activePath}
+                onReload={() => void window.viewer.reloadTab(t.path)}
+                onDismiss={() => void window.viewer.dismissFileChanged(t.path)}
+                onDirtyChange={(d) =>
+                  setDirtyMap((m) => (m[t.path] === d ? m : { ...m, [t.path]: d }))
+                }
+              />
+            )}
+          </div>
+        )
+      })}
+      {!activePath && (
         <div className="empty-state">
           <div className="empty-icon">📄</div>
           <p>
@@ -176,26 +223,6 @@ export default function App() {
             或把它拖到这个窗口
           </p>
         </div>
-      ) : isExcalidraw(activePath) ? (
-        <ExcalidrawView
-          key={activePath}
-          content={activeContent}
-          fileName={activePath}
-          stale={activeTab?.stale ?? false}
-          onReload={() => void window.viewer.reloadTab(activePath)}
-          onDismiss={() => void window.viewer.dismissFileChanged(activePath)}
-          onDirtyChange={setActiveDirty}
-        />
-      ) : (
-        <MarkdownView
-          key={activePath}
-          content={activeContent}
-          filePath={activePath}
-          stale={activeTab?.stale ?? false}
-          onReload={() => void window.viewer.reloadTab(activePath)}
-          onDismiss={() => void window.viewer.dismissFileChanged(activePath)}
-          onDirtyChange={setActiveDirty}
-        />
       )}
     </div>
   )

@@ -9,6 +9,7 @@ interface Props {
   content: string
   fileName: string
   stale: boolean
+  active: boolean
   onReload: () => void
   onDismiss: () => void
   onDirtyChange?: (dirty: boolean) => void
@@ -23,7 +24,7 @@ function pickAppState(appState?: Record<string, unknown>) {
   return { viewBackgroundColor: appState?.viewBackgroundColor ?? '#ffffff' }
 }
 
-export default function ExcalidrawView({ content, fileName, stale, onReload, onDismiss, onDirtyChange }: Props) {
+export default function ExcalidrawView({ content, fileName, stale, active, onReload, onDismiss, onDirtyChange }: Props) {
   const [dark, setDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [viewMode, setViewMode] = useState(true)
   const [dirty, setDirty] = useState(false)
@@ -128,7 +129,7 @@ export default function ExcalidrawView({ content, fileName, stale, onReload, onD
   }
 
   return (
-    <div className="excalidraw-wrap">
+    <div className="excalidraw-wrap" aria-hidden={!active}>
       <Excalidraw
         initialData={
           {

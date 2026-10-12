@@ -23,8 +23,14 @@ const evalJS = async (expression) =>
     ?.result?.value
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// 1. open TOC
-await evalJS(`[...document.querySelectorAll('.viewer-toolbar button')].find(b => b.textContent.includes('目录')).click()`)
+// 1. open TOC (idempotent: a leftover localStorage 'toc' setting may already
+// show it — clicking again would toggle it off)
+await evalJS(`(() => {
+  if (document.querySelector('.toc-panel')) return 'already open'
+  const btn = [...document.querySelectorAll('.viewer-toolbar button')].find(b => b.textContent.includes('目录'))
+  btn?.click()
+  return 'opened'
+})()`)
 await sleep(600)
 console.log(
   '1. TOC open:',
