@@ -15,6 +15,7 @@ interface Props {
   stale: boolean
   onReload: () => void
   onDismiss: () => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 /** Map the current view-mode scroll position to a source offset for the
@@ -140,6 +141,49 @@ async function renderMermaidBlocks(container: HTMLElement) {
   }
 }
 
+/** Attach a GitHub-style hover copy button to every code block. */
+function attachCopyButtons(container: HTMLElement) {
+  container.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('.code-copy-btn')) return
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'code-copy-btn'
+    btn.textContent = '复制'
+    btn.addEventListener('click', () => {
+      const text = pre.querySelector('code')?.textContent ?? pre.textContent ?? ''
+      void copyText(text).then((ok) => {
+        btn.textContent = ok ? '已复制 ✓' : '复制失败'
+        setTimeout(() => {
+          btn.textContent = '复制'
+        }, 1500)
+      })
+    })
+    pre.appendChild(btn)
+  })
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    /* sandboxed/permission edge — fall back to execCommand */
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove()
+    return ok
+  } catch {
+    return false
+  }
+}
+
 /** The read-only rendered document. */
 function RenderedDoc({
   content,
@@ -191,6 +235,7 @@ function RenderedDoc({
 
     void renderMermaidBlocks(el)
     void renderEmbeds(el, dirSlash)
+    attachCopyButtons(el)
 
     const headings: TocHeading[] = [...el.querySelectorAll<HTMLElement>('h1, h2, h3')]
       .filter((h) => h.id)
@@ -204,9 +249,13 @@ function RenderedDoc({
   )
 }
 
-export default function MarkdownView({ content, filePath, stale, onReload, onDismiss }: Props) {
+export default function MarkdownView({ content, filePath, stale, onReload, onDismiss, onDirtyChange }: Props) {
   const [mode, setMode] = useState<'view' | 'edit'>('view')
   const [dirty, setDirty] = useState(false)
+  const changeDirty = (d: boolean) => {
+    setDirty(d)
+    onDirtyChange?.(d)
+  }
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [findOpen, setFindOpen] = useState(false)
   const [editorAnchor, setEditorAnchor] = useState(0)
@@ -273,7 +322,7 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
   const enterEditMode = () => {
     savedRef.current = content
     setConfirmDiscard(false)
-    setDirty(false)
+    changeDirty(false)
     setFindOpen(false)
     setEditorAnchor(computeEditorAnchor(content))
     setMode('edit')
@@ -286,7 +335,7 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
     const r = await window.viewer.saveFile(filePath, text)
     if (r.ok) {
       savedRef.current = text
-      setDirty(false)
+      changeDirty(false)
     } else {
       window.alert('保存失败：' + (r.error ?? '未知错误'))
     }
@@ -298,7 +347,7 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
       setTimeout(() => setConfirmDiscard(false), 3000)
       return
     }
-    setDirty(false)
+    changeDirty(false)
     setConfirmDiscard(false)
     setMode('view')
   }
@@ -313,7 +362,7 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
     if (mode === 'edit') {
       // the editor keeps showing the old buffer while dirty; a reload while
       // dirty means dropping it and falling back to the (fresh) view mode
-      setDirty(false)
+      changeDirty(false)
       setConfirmDiscard(false)
       setMode('view')
     }
@@ -398,7 +447,7 @@ export default function MarkdownView({ content, filePath, stale, onReload, onDis
           content={editorContent}
           dirSlash={dirSlash}
           dark={dark}
-          onDirtyChange={setDirty}
+          onDirtyChange={changeDirty}
           viewRef={cmRef}
           initialPos={editorAnchor}
           zoom={zoom}

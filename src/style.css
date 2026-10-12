@@ -106,6 +106,25 @@ body {
   flex: 1;
 }
 
+.tab-rename {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: var(--bg-canvas, #ffffff);
+  border: 1px solid #0969da;
+  border-radius: 4px;
+  padding: 0 4px;
+  height: 20px;
+  outline: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tab-rename {
+    background: #0d1117;
+  }
+}
+
 .tab-close {
   flex: none;
   border: none;
@@ -539,12 +558,57 @@ body {
 
 /* ---------- print / PDF export ---------- */
 
+/* hover-revealed copy button on rendered code blocks */
+.markdown-body pre {
+  position: relative;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid rgba(125, 125, 125, 0.35);
+  border-radius: 6px;
+  background: #f6f8fa;
+  color: #57606a;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.markdown-body pre:hover .code-copy-btn,
+.code-copy-btn:focus-visible {
+  opacity: 1;
+}
+
+.code-copy-btn:hover {
+  background: #eaeef2;
+  color: #24292f;
+}
+
+@media (prefers-color-scheme: dark) {
+  .code-copy-btn {
+    background: #21262d;
+    color: #8b949e;
+    border-color: rgba(240, 246, 252, 0.15);
+  }
+
+  .code-copy-btn:hover {
+    background: #30363d;
+    color: #e6edf3;
+  }
+}
+
 @media print {
   .tab-bar,
   .theme-toggle,
   .toc-toggle,
   .toc-panel,
-  .viewer-toolbar {
+  .viewer-toolbar,
+  .code-copy-btn {
     display: none !important;
   }
 

@@ -11,6 +11,7 @@ interface Props {
   stale: boolean
   onReload: () => void
   onDismiss: () => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 type SceneState =
@@ -22,10 +23,14 @@ function pickAppState(appState?: Record<string, unknown>) {
   return { viewBackgroundColor: appState?.viewBackgroundColor ?? '#ffffff' }
 }
 
-export default function ExcalidrawView({ content, fileName, stale, onReload, onDismiss }: Props) {
+export default function ExcalidrawView({ content, fileName, stale, onReload, onDismiss, onDirtyChange }: Props) {
   const [dark, setDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [viewMode, setViewMode] = useState(true)
   const [dirty, setDirty] = useState(false)
+  const changeDirty = (d: boolean) => {
+    setDirty(d)
+    onDirtyChange?.(d)
+  }
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
   const latestRef = useRef<{ elements: unknown[]; appState: Record<string, unknown> } | null>(null)
@@ -46,7 +51,7 @@ export default function ExcalidrawView({ content, fileName, stale, onReload, onD
       const next = parseExcalidraw(content)
       setScene(next)
       savedJsonRef.current = serializeExcalidraw(next.elements, pickAppState(next.appState))
-      setDirty(false)
+      changeDirty(false)
       // On mount, initialData already carries the scene — only sync live updates
       // from external file changes after that (calling updateScene during mount
       // races with Excalidraw's internal state init and crashes it).
@@ -88,7 +93,7 @@ export default function ExcalidrawView({ content, fileName, stale, onReload, onD
     const r = await window.viewer.saveFile(fileName, next)
     if (r.ok) {
       savedJsonRef.current = json
-      setDirty(false)
+      changeDirty(false)
     } else {
       window.alert('保存失败：' + (r.error ?? '未知错误'))
     }
@@ -105,7 +110,7 @@ export default function ExcalidrawView({ content, fileName, stale, onReload, onD
       setTimeout(() => setConfirmDiscard(false), 3000)
       return
     }
-    setDirty(false)
+    changeDirty(false)
     setConfirmDiscard(false)
     latestRef.current = null
     setViewMode(true)
@@ -114,7 +119,7 @@ export default function ExcalidrawView({ content, fileName, stale, onReload, onD
   const handleStaleReload = () => {
     if (!viewMode && dirty) {
       // same contract as the markdown editor: reload drops unsaved edits
-      setDirty(false)
+      changeDirty(false)
       setConfirmDiscard(false)
       latestRef.current = null
       setViewMode(true)
@@ -144,7 +149,7 @@ export default function ExcalidrawView({ content, fileName, stale, onReload, onD
               latestRef.current.elements,
               pickAppState(latestRef.current.appState),
             )
-            setDirty(json !== savedJsonRef.current)
+            changeDirty(json !== savedJsonRef.current)
           }, 200)
         }}
         viewModeEnabled={viewMode}

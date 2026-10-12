@@ -29,7 +29,7 @@ const evalJS = async (expression) => {
 }
 
 // 1. enter edit mode via toolbar
-await evalJS(`document.querySelector('.viewer-toolbar button').click()`)
+await evalJS(`[...document.querySelectorAll('.viewer-toolbar button')].find(b => b.textContent.includes('编辑')).click()`)
 await sleep(1000)
 let state = await evalJS(`JSON.stringify({
   editor: !!document.querySelector('.cm-editor'),
@@ -55,8 +55,8 @@ console.log('2. after click:', state)
 await send('Input.insertText', { text: 'EDIT-MARKER ' })
 await sleep(600)
 state = await evalJS(`JSON.stringify({
-  saveBtn: document.querySelector('.viewer-toolbar button')?.textContent.trim(),
-  saveDisabled: document.querySelector('.viewer-toolbar button')?.disabled,
+  saveBtn: [...document.querySelectorAll('.viewer-toolbar button')].find(b => b.textContent.includes('保存'))?.textContent.trim(),
+  saveDisabled: [...document.querySelectorAll('.viewer-toolbar button')].find(b => b.textContent.includes('保存'))?.disabled,
 })`)
 console.log('3. after typing:', state)
 
@@ -68,7 +68,7 @@ await sleep(1200)
 const saved = readFileSync('samples/demo.md', 'utf8')
 console.log('4. file has marker:', saved.includes('EDIT-MARKER'))
 state = await evalJS(`JSON.stringify({
-  saveBtn: document.querySelector('.viewer-toolbar button')?.textContent.trim(),
+  saveBtn: [...document.querySelectorAll('.viewer-toolbar button')].find(b => b.textContent.includes('保存'))?.textContent.trim(),
 })`)
 console.log('   toolbar:', state)
 

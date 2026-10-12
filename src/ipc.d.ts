@@ -15,6 +15,10 @@ interface ViewerBridge {
   getTabContent: (path: string) => Promise<string | null>
   activateTab: (path: string) => Promise<void>
   closeTab: (path: string) => Promise<void>
+  renameFile: (
+    oldPath: string,
+    newName: string,
+  ) => Promise<{ ok: boolean; path?: string; error?: string }>
   openPath: (filePath: string) => Promise<void>
   pathForFile: (file: File) => string
   setThemeSource: (source: 'system' | 'light' | 'dark') => Promise<void>

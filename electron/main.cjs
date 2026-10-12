@@ -25,6 +25,39 @@ let openTabs = [] // [{ path, content }]
 let activePath = null
 const watchers = new Map() // path -> { watcher, timer }
 
+// --- session persistence: restore the last open tabs on launch ---
+
+function sessionFile() {
+  return path.join(app.getPath('userData'), 'session.json')
+}
+
+function saveSession() {
+  try {
+    fs.writeFileSync(
+      sessionFile(),
+      JSON.stringify({ tabs: openTabs.map((t) => t.path), activePath }),
+    )
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function restoreSession() {
+  let data
+  try {
+    data = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
+  } catch {
+    return
+  }
+  if (!Array.isArray(data.tabs)) return
+  for (const p of data.tabs) {
+    if (typeof p === 'string') await openFile(p) // skips files that no longer exist
+  }
+  if (typeof data.activePath === 'string' && tabOf(data.activePath)) {
+    activateTab(data.activePath)
+  }
+}
+
 function extractFileArg(argv) {
   return argv.find((a) => SUPPORTED.test(a) && !a.startsWith('-') && !a.startsWith('local-file'))
 }
@@ -34,6 +67,7 @@ function tabOf(p) {
 }
 
 function broadcastTabs() {
+  saveSession()
   win?.webContents.send('tabs-changed', {
     tabs: openTabs.map((t) => ({ path: t.path, stale: !!t.stale })),
     activePath,
@@ -207,6 +241,42 @@ if (!gotLock) {
     ipcMain.handle('close-tab', (_e, p) => {
       if (typeof p === 'string') closeTab(p)
     })
+    ipcMain.handle('rename-file', async (_e, oldPath, newName) => {
+      if (typeof oldPath !== 'string' || typeof newName !== 'string') {
+        return { ok: false, error: 'bad args' }
+      }
+      const tab = tabOf(oldPath)
+      if (!tab) return { ok: false, error: 'tab not found' }
+      const name = newName.trim()
+      if (!name || name === '.' || name === '..' || /[\\/:*?"<>|]/.test(name)) {
+        return { ok: false, error: '文件名不能包含 \\ / : * ? " < > | 或为空' }
+      }
+      if (name === path.basename(oldPath)) return { ok: true, path: oldPath }
+      const dir = path.dirname(oldPath)
+      const newPath = path.join(dir, name)
+      // Windows is case-insensitive: a pure case change renames onto itself
+      if (newPath.toLowerCase() !== oldPath.toLowerCase()) {
+        try {
+          await fsp.access(newPath)
+          return { ok: false, error: `已存在同名文件：${name}` }
+        } catch {
+          /* target free — proceed */
+        }
+      }
+      try {
+        await fsp.rename(oldPath, newPath)
+      } catch (err) {
+        return { ok: false, error: String(err) }
+      }
+      tab.path = newPath
+      unwatchTab(oldPath)
+      watchTab(newPath)
+      if (activePath === oldPath) activePath = newPath
+      broadcastTabs()
+      sendContent(newPath)
+      syncTitle()
+      return { ok: true, path: newPath }
+    })
     ipcMain.handle('open-path', (_e, filePath) => {
       if (typeof filePath === 'string' && SUPPORTED.test(filePath)) openFile(filePath)
     })
@@ -291,9 +361,11 @@ if (!gotLock) {
 
     createWindow()
 
-    // File passed on the command line (double-click / "open with")
+    // File passed on the command line (double-click / "open with"); otherwise
+    // bring back the tabs from the previous session
     const cli = extractFileArg(process.argv)
     if (cli) openFile(cli)
+    else await restoreSession()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

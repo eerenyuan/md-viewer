@@ -22,6 +22,10 @@ export default function App() {
   const [tabs, setTabs] = useState<TabMeta[]>([])
   const [activePath, setActivePath] = useState<string | null>(null)
   const [activeContent, setActiveContent] = useState('')
+  const [activeDirty, setActiveDirty] = useState(false)
+  const [renamingPath, setRenamingPath] = useState<string | null>(null)
+  const renamingPathRef = useRef<string | null>(null)
+  renamingPathRef.current = renamingPath
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('theme')
     return THEMES.includes(saved as Theme) ? (saved as Theme) : 'system'
@@ -30,9 +34,27 @@ export default function App() {
   const contentCache = useRef(new Map<string, string>())
   const activePathRef = useRef<string | null>(null)
   activePathRef.current = activePath
+  const activeDirtyRef = useRef(false)
+  activeDirtyRef.current = activeDirty
   const tabsRef = useRef<TabMeta[]>(tabs)
   tabsRef.current = tabs
   const activeTab = tabs.find((t) => t.path === activePath)
+
+  const startRename = useCallback((p: string) => {
+    if (p === activePathRef.current && activeDirtyRef.current) {
+      window.alert('有未保存的修改，请先保存后再重命名')
+      return
+    }
+    setRenamingPath(p)
+  }, [])
+
+  const handleRename = useCallback(async (p: string, name: string) => {
+    setRenamingPath(null)
+    const clean = name.trim()
+    if (!clean) return
+    const r = await window.viewer.renameFile(p, clean)
+    if (!r.ok) window.alert('重命名失败：' + (r.error ?? '未知错误'))
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('theme', theme)
@@ -64,6 +86,7 @@ export default function App() {
       }
       setTabs(data.tabs)
       setActivePath(data.activePath)
+      setActiveDirty(false)
       void ensureContent(data.activePath)
     }
 
@@ -78,6 +101,14 @@ export default function App() {
     window.viewer.getState().then(applyTabs)
 
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'F2') {
+        const p = activePathRef.current
+        if (p && !renamingPathRef.current) {
+          e.preventDefault()
+          startRename(p)
+        }
+        return
+      }
       if (!e.ctrlKey) return
       if (e.key === 'Tab') {
         e.preventDefault()
@@ -99,7 +130,7 @@ export default function App() {
       offFileChanged()
       window.removeEventListener('keydown', onKey)
     }
-  }, [ensureContent])
+  }, [ensureContent, startRename])
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault()
@@ -119,8 +150,12 @@ export default function App() {
         <TabBar
           tabs={tabs}
           activePath={activePath}
+          renamingPath={renamingPath}
           onSelect={(p) => window.viewer.activateTab(p)}
           onClose={(p) => window.viewer.closeTab(p)}
+          onStartRename={startRename}
+          onRename={(p, name) => void handleRename(p, name)}
+          onCancelRename={() => setRenamingPath(null)}
         />
       )}
       <button
@@ -149,6 +184,7 @@ export default function App() {
           stale={activeTab?.stale ?? false}
           onReload={() => void window.viewer.reloadTab(activePath)}
           onDismiss={() => void window.viewer.dismissFileChanged(activePath)}
+          onDirtyChange={setActiveDirty}
         />
       ) : (
         <MarkdownView
@@ -158,6 +194,7 @@ export default function App() {
           stale={activeTab?.stale ?? false}
           onReload={() => void window.viewer.reloadTab(activePath)}
           onDismiss={() => void window.viewer.dismissFileChanged(activePath)}
+          onDirtyChange={setActiveDirty}
         />
       )}
     </div>
