@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('viewer', {
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   openNewWindow: () => ipcRenderer.invoke('open-new-window'),
   tearOutTab: (path) => ipcRenderer.invoke('tear-out-tab', path),
+  tabDragEnd: (path, screenX, screenY) => ipcRenderer.invoke('tab-drag-end', path, screenX, screenY),
   pathForFile: (file) => webUtils.getPathForFile(file),
   setThemeSource: (source) => ipcRenderer.invoke('set-theme-source', source),
   saveFile: (filePath, content) => ipcRenderer.invoke('save-file', filePath, content),

@@ -211,6 +211,31 @@ if (phase === 'run3') {
   process.exit(process.exitCode || 0)
 }
 
+if (phase === 'close-all') {
+  // graceful close of every window (fires the 'closed' chain in main) — the
+  // session written by the LAST broadcastTabs must survive this. Close
+  // emptier windows first: closing a window persists the REMAINING ones, so
+  // the last one closed (with tabs) must be the one remembered.
+  const pages = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).filter(firstPage)
+  const withCounts = []
+  for (const p of pages) {
+    const w = await connect((t) => t.id === p.id)
+    const n = await w.evalJs(`window.viewer.getState().then(s => s.tabs.length)`)
+    withCounts.push({ page: p, n, w })
+    w.close()
+    await sleep(200)
+  }
+  for (const { page } of withCounts.sort((a, b) => a.n - b.n)) {
+    const w = await connect((t) => t.id === page.id)
+    await w.evalJs(`window.close(); undefined`)
+    await sleep(500)
+    w.close()
+  }
+  await sleep(800)
+  console.log(`closed ${pages.length} window(s)`)
+  process.exit(0)
+}
+
 if (phase === 'run4') {
   // tear-off: drag tab A below the tab bar -> detaches into a new window
   const w1 = await connect(firstPage)
@@ -240,34 +265,58 @@ if (phase === 'run4') {
     if (newPage) {
       const w2 = await connect((t) => t.id === newPage.id)
       await sleep(600)
-      const w2paths = await w2.evalJs(`window.viewer.getState().then(s => s.tabs.map(t => t.path))`)
-      check('torn tab lives in new window', w2paths.length === 1 && w2paths[0] === A, JSON.stringify(w2paths))
-      const w2h1 = await w2.evalJs(`document.querySelector('.tab-pane.active .markdown-body h1, .markdown-body h1')?.textContent`)
-      check('torn tab rendered', w2h1 === '文档 A（长）', String(w2h1))
+
+      // --- dock: drag B from w1 onto w2's tab bar (screen-space hit test) ---
+      const bRect = await w1.evalJs(`(() => {
+        const tab = [...document.querySelectorAll('.tab')].find(t => t.textContent.includes('keepalive-b.md'))
+        if (!tab) return null
+        const r = tab.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })()`)
+      const dropAt = await w2.evalJs(`(() => {
+        const bar = document.querySelector('.tab-bar').getBoundingClientRect()
+        return { screenX: window.screenX + bar.x + bar.width / 2, screenY: window.screenY + bar.y + bar.height / 2 }
+      })()`)
+      const w1Origin = await w1.evalJs(`({ x: window.screenX, y: window.screenY })`)
+      const dropView = { x: dropAt.screenX - w1Origin.x, y: dropAt.screenY - w1Origin.y }
+      if (bRect && dropAt) {
+        await w1.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: bRect.x, y: bRect.y, button: 'left', clickCount: 1 })
+        await w1.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: bRect.x, y: bRect.y + 60, button: 'left', clickCount: 1 })
+        await w1.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dropView.x, y: dropView.y, button: 'left', clickCount: 1 })
+        await w1.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: dropView.x, y: dropView.y, button: 'left', clickCount: 1 })
+        await sleep(1200)
+        const pagesAfterDock = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).filter(firstPage)
+        check('dock did not create a window', pagesAfterDock.length === 2, `pages=${pagesAfterDock.length}`)
+        const w1paths = await w1.evalJs(`window.viewer.getState().then(s => s.tabs.map(t => t.path))`)
+        check('B left the source window', !w1paths.includes(B), JSON.stringify(w1paths))
+        const w2state = await w2.evalJs(`window.viewer.getState()`)
+        check('B docked into target window', w2state.tabs.some((t) => t.path === B) && w2state.activePath === B, JSON.stringify(w2state.tabs.map((t) => t.path)))
+      }
+
+      // --- last tab can't be torn off: w1 only has C now ---
+      const cRect = await w1.evalJs(`(() => {
+        const tab = [...document.querySelectorAll('.tab')].find(t => t.textContent.includes('keepalive-c.md'))
+        if (!tab) return null
+        const r = tab.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })()`)
+      if (cRect) {
+        await w1.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: cRect.x, y: cRect.y, button: 'left', clickCount: 1 })
+        await w1.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: cRect.x, y: cRect.y + 120, button: 'left', clickCount: 1 })
+        await w1.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: cRect.x, y: cRect.y + 120, button: 'left', clickCount: 1 })
+        await sleep(1000)
+        const pagesAfterLast = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).filter(firstPage)
+        check('last tab cannot be torn off', pagesAfterLast.length === 2, `pages=${pagesAfterLast.length}`)
+        const w1still = await w1.evalJs(`window.viewer.getState().then(s => s.tabs.map(t => t.path))`)
+        check('last tab stayed', w1still.includes(C), JSON.stringify(w1still))
+      }
+
+      // cleanup: leave w2=[A,B] alive; the close-all + relaunch phases
+      // verify the graceful-close session survival
+      await w1.evalJs(`window.viewer.closeTab(${JSON.stringify(C)}); undefined`)
+      await sleep(200)
       w2.close()
     }
-    const w1paths = await w1.evalJs(`window.viewer.getState().then(s => s.tabs.map(t => t.path))`)
-    check('source window kept the rest', !w1paths.includes(A) && w1paths.includes(B) && w1paths.includes(C), JSON.stringify(w1paths))
-    // plain click on a remaining tab still selects it (drag didn't break clicks)
-    const bRect = await w1.evalJs(`(() => {
-      const tab = [...document.querySelectorAll('.tab')].find(t => t.textContent.includes('keepalive-b.md'))
-      if (!tab) return null
-      const r = tab.getBoundingClientRect()
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
-    })()`)
-    if (bRect) {
-      await w1.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: bRect.x, y: bRect.y, button: 'left', clickCount: 1 })
-      await w1.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: bRect.x, y: bRect.y, button: 'left', clickCount: 1 })
-      await sleep(400)
-      const active = await w1.evalJs(`window.viewer.getState().then(s => s.activePath)`)
-      check('plain click still selects tab', active === B, String(active))
-    }
-    // cleanup
-    await w1.evalJs(`window.viewer.closeTab(${JSON.stringify(B)}); undefined`)
-    await sleep(200)
-    await w1.evalJs(`window.viewer.closeTab(${JSON.stringify(C)}); undefined`)
-    await sleep(300)
-    for (const f of [A, B, C]) if (existsSync(f)) unlinkSync(f)
   }
   console.log(results.join('\n'))
   w1.close()
@@ -275,18 +324,20 @@ if (phase === 'run4') {
 }
 
 if (phase === 'run2') {
-  // after full relaunch: the surviving window's tabs come back
+  // after GRACEFUL close of all windows + relaunch: tabs come back
+  // (chain: run3 restored [A,B]+C, run4 tore A out and docked B in, leaving
+  // one window with [A,B], then close-all shut everything down normally)
   const w1 = await connect(firstPage)
   await sleep(800)
   const pages = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).filter(firstPage)
   check('one window restored', pages.length === 1, `pages=${pages.length}`)
   const st = await w1.evalJs(`window.viewer.getState()`)
   const paths = st.tabs.map((t) => t.path)
-  check('window tabs restored', paths.length === 2 && paths[0] === A_RENAMED && paths[1] === B, JSON.stringify(paths))
-  const h1 = await w1.evalJs(`document.querySelector('.markdown-body h1')?.textContent`)
-  check('active tab content rendered', h1 === '文档 A（长）', String(h1))
+  check('window tabs restored after graceful close', paths.length === 2 && paths[0] === A && paths[1] === B, JSON.stringify(paths))
+  const h1 = await w1.evalJs(`document.querySelector('.tab-pane.active .markdown-body h1')?.textContent`)
+  check('active tab content rendered', h1 === '文档 B', String(h1))
   // cleanup
-  await w1.evalJs(`window.viewer.closeTab(${JSON.stringify(A_RENAMED)}); undefined`)
+  await w1.evalJs(`window.viewer.closeTab(${JSON.stringify(A)}); undefined`)
   await sleep(200)
   await w1.evalJs(`window.viewer.closeTab(${JSON.stringify(B)}); undefined`)
   await sleep(300)

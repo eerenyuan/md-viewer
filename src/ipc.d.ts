@@ -22,6 +22,7 @@ interface ViewerBridge {
   openPath: (filePath: string) => Promise<void>
   openNewWindow: () => Promise<void>
   tearOutTab: (path: string) => Promise<void>
+  tabDragEnd: (path: string, screenX: number, screenY: number) => Promise<void>
   pathForFile: (file: File) => string
   setThemeSource: (source: 'system' | 'light' | 'dark') => Promise<void>
   saveFile: (

@@ -74,7 +74,10 @@ function createWindow() {
       wins.delete(id)
     }
     if (lastFocusedId === id) lastFocusedId = null
-    saveSession()
+    // Only re-save while other windows remain: when the LAST window closes,
+    // writing now would persist an empty session and wipe the tabs the user
+    // just had open (the last broadcastTabs already recorded them)
+    if (wins.size > 0) saveSession()
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html')).catch(() => {})
@@ -327,6 +330,76 @@ if (!gotLock) {
       broadcastTabs(newId)
       sendContent(newId, p)
       syncTitle(newId)
+    })
+    // End of a tab drag: dock into another window when released over its top
+    // area, otherwise detach into a new window.
+    ipcMain.handle('tab-drag-end', (e, p, screenX, screenY) => {
+      const srcId = e.sender.id
+      const w = entryOf(srcId)
+      if (
+        typeof p !== 'string' || !w ||
+        typeof screenX !== 'number' || typeof screenY !== 'number'
+      ) return
+      const idx = w.openTabs.findIndex((t) => t.path === p)
+      if (idx === -1) return
+
+      // find another window whose top strip contains the release point
+      let targetId = null
+      for (const [id, tw] of wins) {
+        if (id === srcId || tw.win.isDestroyed()) continue
+        const b = tw.win.getBounds()
+        const topStrip = Math.min(110, b.height)
+        if (screenX >= b.x && screenX <= b.x + b.width && screenY >= b.y && screenY <= b.y + topStrip) {
+          targetId = id
+          break
+        }
+      }
+
+      if (targetId === null) {
+        // free area -> detach into a new window (classic tear-off)
+        const [tab] = w.openTabs.splice(idx, 1)
+        unwatchTab(srcId, p)
+        if (w.activePath === p) {
+          w.activePath = w.openTabs[Math.min(idx, w.openTabs.length - 1)]?.path ?? null
+        }
+        const newId = createWindow()
+        const nw = entryOf(newId)
+        nw.openTabs.push(tab)
+        nw.activePath = p
+        watchTab(newId, p)
+        broadcastTabs(srcId)
+        if (w.activePath) sendContent(srcId, w.activePath)
+        syncTitle(srcId)
+        broadcastTabs(newId)
+        sendContent(newId, p)
+        syncTitle(newId)
+        return
+      }
+
+      // dock into the target window
+      const tw = entryOf(targetId)
+      const existing = tw.openTabs.find((t) => t.path === p)
+      const [tab] = w.openTabs.splice(idx, 1)
+      unwatchTab(srcId, p)
+      if (w.activePath === p) {
+        w.activePath = w.openTabs[Math.min(idx, w.openTabs.length - 1)]?.path ?? null
+      }
+      if (existing) {
+        // already open there — keep the target's copy, but don't lose a stale flag
+        if (tab.stale) existing.stale = true
+        tw.activePath = existing.path
+      } else {
+        tw.openTabs.push(tab)
+        tw.activePath = p
+        watchTab(targetId, p)
+      }
+      broadcastTabs(srcId)
+      if (w.activePath) sendContent(srcId, w.activePath)
+      syncTitle(srcId)
+      broadcastTabs(targetId)
+      sendContent(targetId, tw.activePath)
+      syncTitle(targetId)
+      tw.win.focus()
     })
     ipcMain.handle('open-path', (e, filePath) => {
       if (typeof filePath === 'string' && SUPPORTED.test(filePath)) openFile(filePath, e.sender.id)

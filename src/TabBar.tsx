@@ -14,7 +14,7 @@ interface Props {
   onStartRename: (path: string) => void
   onRename: (path: string, newName: string) => void
   onCancelRename: () => void
-  onTearOut: (path: string) => void
+  onTearOut: (path: string, screenX: number, screenY: number) => void
 }
 
 function baseName(p: string) {
@@ -91,8 +91,10 @@ export default function TabBar({
   const [ghost, setGhost] = useState<{ x: number; y: number; name: string } | null>(null)
 
   // tear-off: dragging a tab below/above the tab bar detaches it into a new
-  // window (browser-style). Plain clicks and double-click-rename still work —
-  // the drag only arms once the pointer clearly left the bar.
+  // window — or docks it into another window when released over its top area
+  // (main-side hit test). The last remaining tab can't be torn off (that
+  // would strand an empty window). Plain clicks and double-click-rename
+  // still work — the drag only arms once the pointer clearly left the bar.
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
       const d = dragRef.current
@@ -100,6 +102,7 @@ export default function TabBar({
       const bar = barRef.current?.getBoundingClientRect()
       if (!bar) return
       if (!d.tearing) {
+        if (tabs.length < 2) return
         const dist = Math.hypot(e.clientX - d.x, e.clientY - d.y)
         const outside = e.clientY > bar.bottom + 12 || e.clientY < bar.top - 12
         if (dist < 8 || !outside) return
@@ -109,12 +112,12 @@ export default function TabBar({
       }
       setGhost({ x: e.clientX, y: e.clientY, name: baseName(d.path) })
     }
-    const onUp = () => {
+    const onUp = (e: PointerEvent) => {
       const d = dragRef.current
       dragRef.current = null
       setGhost(null)
       document.body.classList.remove('tab-tearing')
-      if (d?.tearing) onTearOut(d.path)
+      if (d?.tearing) onTearOut(d.path, e.screenX, e.screenY)
       // let the (suppressed) synthetic click fire first, then re-arm
       setTimeout(() => (suppressClickRef.current = false), 0)
     }
@@ -124,7 +127,7 @@ export default function TabBar({
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-  }, [onTearOut])
+  }, [onTearOut, tabs.length])
 
   return (
     <div className="tab-bar" ref={barRef}>
