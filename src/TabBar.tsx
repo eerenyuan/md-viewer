@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export interface TabMeta {
   path: string
@@ -14,6 +14,7 @@ interface Props {
   onStartRename: (path: string) => void
   onRename: (path: string, newName: string) => void
   onCancelRename: () => void
+  onTearOut: (path: string) => void
 }
 
 function baseName(p: string) {
@@ -82,15 +83,70 @@ export default function TabBar({
   onStartRename,
   onRename,
   onCancelRename,
+  onTearOut,
 }: Props) {
+  const barRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{ path: string; x: number; y: number; tearing: boolean } | null>(null)
+  const suppressClickRef = useRef(false)
+  const [ghost, setGhost] = useState<{ x: number; y: number; name: string } | null>(null)
+
+  // tear-off: dragging a tab below/above the tab bar detaches it into a new
+  // window (browser-style). Plain clicks and double-click-rename still work —
+  // the drag only arms once the pointer clearly left the bar.
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current
+      if (!d) return
+      const bar = barRef.current?.getBoundingClientRect()
+      if (!bar) return
+      if (!d.tearing) {
+        const dist = Math.hypot(e.clientX - d.x, e.clientY - d.y)
+        const outside = e.clientY > bar.bottom + 12 || e.clientY < bar.top - 12
+        if (dist < 8 || !outside) return
+        d.tearing = true
+        suppressClickRef.current = true
+        document.body.classList.add('tab-tearing')
+      }
+      setGhost({ x: e.clientX, y: e.clientY, name: baseName(d.path) })
+    }
+    const onUp = () => {
+      const d = dragRef.current
+      dragRef.current = null
+      setGhost(null)
+      document.body.classList.remove('tab-tearing')
+      if (d?.tearing) onTearOut(d.path)
+      // let the (suppressed) synthetic click fire first, then re-arm
+      setTimeout(() => (suppressClickRef.current = false), 0)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [onTearOut])
+
   return (
-    <div className="tab-bar">
+    <div className="tab-bar" ref={barRef}>
       {tabs.map((t) => (
         <div
           key={t.path}
           className={`tab ${t.path === activePath ? 'active' : ''}`}
-          title={renamingPath === t.path ? 'Enter 确认 · Esc 取消' : `${t.path}\n双击或 F2 重命名`}
-          onClick={() => onSelect(t.path)}
+          title={renamingPath === t.path ? 'Enter 确认 · Esc 取消' : `${t.path}\n双击或 F2 重命名 · 拖出标签页可拆分为新窗口`}
+          onClick={(e) => {
+            if (suppressClickRef.current) {
+              e.preventDefault()
+              e.stopPropagation()
+              return
+            }
+            onSelect(t.path)
+          }}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return
+            const target = e.target as HTMLElement
+            if (target.closest('.tab-close') || target.closest('.tab-rename')) return
+            dragRef.current = { path: t.path, x: e.clientX, y: e.clientY, tearing: false }
+          }}
           onDoubleClick={(e) => {
             e.stopPropagation()
             onStartRename(t.path)
@@ -121,6 +177,11 @@ export default function TabBar({
           </button>
         </div>
       ))}
+      {ghost && (
+        <div className="tab-tear-ghost" style={{ left: ghost.x, top: ghost.y }}>
+          {ghost.name}
+        </div>
+      )}
     </div>
   )
 }

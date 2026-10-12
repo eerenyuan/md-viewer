@@ -304,6 +304,30 @@ if (!gotLock) {
     ipcMain.handle('open-new-window', () => {
       createWindow()
     })
+    ipcMain.handle('tear-out-tab', (e, p) => {
+      const srcId = e.sender.id
+      const w = entryOf(srcId)
+      if (typeof p !== 'string' || !w) return
+      const idx = w.openTabs.findIndex((t) => t.path === p)
+      if (idx === -1) return
+      // move the tab (with its cached content) into a brand-new window
+      const [tab] = w.openTabs.splice(idx, 1)
+      unwatchTab(srcId, p)
+      if (w.activePath === p) {
+        w.activePath = w.openTabs[Math.min(idx, w.openTabs.length - 1)]?.path ?? null
+      }
+      const newId = createWindow()
+      const nw = entryOf(newId)
+      nw.openTabs.push(tab)
+      nw.activePath = p
+      watchTab(newId, p)
+      broadcastTabs(srcId)
+      if (w.activePath) sendContent(srcId, w.activePath)
+      syncTitle(srcId)
+      broadcastTabs(newId)
+      sendContent(newId, p)
+      syncTitle(newId)
+    })
     ipcMain.handle('open-path', (e, filePath) => {
       if (typeof filePath === 'string' && SUPPORTED.test(filePath)) openFile(filePath, e.sender.id)
     })
@@ -435,11 +459,13 @@ if (!gotLock) {
 
     createWindow()
 
-    // File passed on the command line (double-click / "open with") goes to the
-    // initial window; otherwise bring back the tabs from the previous session
+    // Bring back the tabs from the previous session first, then add the file
+    // passed on the command line (double-click / "open with") on top —
+    // launching via a file must not discard the remembered tabs. Goes to the
+    // last-focused (most recently restored) window.
     const cli = extractFileArg(process.argv)
-    if (cli) await openFile(cli, [...wins.keys()][0])
-    else await restoreSession()
+    await restoreSession()
+    if (cli) await openFile(cli)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -26,6 +26,24 @@ if (phase === 'setup') {
   process.exit(0)
 }
 
+if (phase === 'setup-cli') {
+  let long = '# 文档 A（长）\n\n'
+  for (let i = 1; i <= 120; i++) long += `段落 ${i}：内容一二三四五六七八九十，填充文本。\n\n`
+  writeFileSync(A, long, 'utf8')
+  writeFileSync(B, '# 文档 B\n\n短文档。\n', 'utf8')
+  writeFileSync(C, '# 文档 C\n\n第三个文档。\n', 'utf8')
+  if (existsSync(A_RENAMED)) unlinkSync(A_RENAMED)
+  // pre-seed a saved session: two tabs, B active — launching with a CLI file
+  // must RESTORE these and add the file, not replace them
+  writeFileSync(
+    SESSION,
+    JSON.stringify({ windows: [{ tabs: [A, B], activePath: B }] }),
+    'utf8',
+  )
+  console.log('setup-cli done')
+  process.exit(0)
+}
+
 async function connect(predicate) {
   const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json()
   const page = targets.find(predicate)
@@ -56,7 +74,7 @@ async function connect(predicate) {
     if (r.result.exceptionDetails) throw new Error('eval: ' + JSON.stringify(r.result.exceptionDetails).slice(0, 200))
     return r.result.result.value
   }
-  return { evalJs, close: () => ws.close() }
+  return { evalJs, send, close: () => ws.close() }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -172,6 +190,87 @@ if (phase === 'run1') {
   check('closing a window shrinks session', sess2.windows.length === 1 && sess2.windows[0].tabs.includes(A_RENAMED), JSON.stringify(sess2))
   w1.close()
   console.log(results.join('\n'))
+  process.exit(process.exitCode || 0)
+}
+
+if (phase === 'run3') {
+  // app was launched WITH a CLI file (C) on top of a saved [A, B] session
+  const w1 = await connect(firstPage)
+  await sleep(800)
+  const st = await w1.evalJs(`window.viewer.getState()`)
+  const paths = st.tabs.map((t) => t.path)
+  check(
+    'CLI launch restores session + adds file',
+    paths.length === 3 && paths[0] === A && paths[1] === B && paths[2] === C && st.activePath === C,
+    JSON.stringify(paths),
+  )
+  const h1 = await w1.evalJs(`document.querySelector('.tab-pane.active .markdown-body h1')?.textContent`)
+  check('CLI file rendered active', h1 === '文档 C', String(h1))
+  w1.close()
+  console.log(results.join('\n'))
+  process.exit(process.exitCode || 0)
+}
+
+if (phase === 'run4') {
+  // tear-off: drag tab A below the tab bar -> detaches into a new window
+  const w1 = await connect(firstPage)
+  await sleep(600)
+  const before = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).filter(firstPage)
+  const tabRect = await w1.evalJs(`(() => {
+    const tab = [...document.querySelectorAll('.tab')].find(t => t.title.includes('keepalive-a.md') || t.textContent.includes('keepalive-a.md'))
+    if (!tab) return null
+    const r = tab.getBoundingClientRect()
+    const bar = document.querySelector('.tab-bar').getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, barBottom: bar.bottom }
+  })()`)
+  check('found tab to drag', !!tabRect)
+  if (tabRect) {
+    const send = async (type, x, y) => {
+      await w1.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 })
+    }
+    await send('mousePressed', tabRect.x, tabRect.y)
+    await send('mouseMoved', tabRect.x, tabRect.y)
+    await send('mouseMoved', tabRect.x, tabRect.y + 20)
+    await send('mouseMoved', tabRect.x + 30, tabRect.y + 80) // clearly below the bar
+    await send('mouseReleased', tabRect.x + 30, tabRect.y + 80)
+    await sleep(1500)
+    const after = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).filter(firstPage)
+    check('tear-off created a new window', after.length === before.length + 1, `pages=${after.length}`)
+    const newPage = after.find((p) => !before.some((b) => b.id === p.id))
+    if (newPage) {
+      const w2 = await connect((t) => t.id === newPage.id)
+      await sleep(600)
+      const w2paths = await w2.evalJs(`window.viewer.getState().then(s => s.tabs.map(t => t.path))`)
+      check('torn tab lives in new window', w2paths.length === 1 && w2paths[0] === A, JSON.stringify(w2paths))
+      const w2h1 = await w2.evalJs(`document.querySelector('.tab-pane.active .markdown-body h1, .markdown-body h1')?.textContent`)
+      check('torn tab rendered', w2h1 === '文档 A（长）', String(w2h1))
+      w2.close()
+    }
+    const w1paths = await w1.evalJs(`window.viewer.getState().then(s => s.tabs.map(t => t.path))`)
+    check('source window kept the rest', !w1paths.includes(A) && w1paths.includes(B) && w1paths.includes(C), JSON.stringify(w1paths))
+    // plain click on a remaining tab still selects it (drag didn't break clicks)
+    const bRect = await w1.evalJs(`(() => {
+      const tab = [...document.querySelectorAll('.tab')].find(t => t.textContent.includes('keepalive-b.md'))
+      if (!tab) return null
+      const r = tab.getBoundingClientRect()
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+    })()`)
+    if (bRect) {
+      await w1.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: bRect.x, y: bRect.y, button: 'left', clickCount: 1 })
+      await w1.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: bRect.x, y: bRect.y, button: 'left', clickCount: 1 })
+      await sleep(400)
+      const active = await w1.evalJs(`window.viewer.getState().then(s => s.activePath)`)
+      check('plain click still selects tab', active === B, String(active))
+    }
+    // cleanup
+    await w1.evalJs(`window.viewer.closeTab(${JSON.stringify(B)}); undefined`)
+    await sleep(200)
+    await w1.evalJs(`window.viewer.closeTab(${JSON.stringify(C)}); undefined`)
+    await sleep(300)
+    for (const f of [A, B, C]) if (existsSync(f)) unlinkSync(f)
+  }
+  console.log(results.join('\n'))
+  w1.close()
   process.exit(process.exitCode || 0)
 }
 

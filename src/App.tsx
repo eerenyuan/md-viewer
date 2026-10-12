@@ -171,6 +171,7 @@ export default function App() {
           onStartRename={startRename}
           onRename={(p, name) => void handleRename(p, name)}
           onCancelRename={() => setRenamingPath(null)}
+          onTearOut={(p) => void window.viewer.tearOutTab(p)}
         />
       )}
       <button

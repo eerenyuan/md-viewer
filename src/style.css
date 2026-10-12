@@ -144,6 +144,27 @@ body {
   background: rgba(125, 125, 125, 0.25);
 }
 
+/* tear-off ghost: follows the pointer while dragging a tab out of the bar */
+.tab-tear-ghost {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: var(--bg-canvas, #ffffff);
+  border: 1px solid rgba(125, 125, 125, 0.4);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  font-size: 13px;
+  color: #24292f;
+  transform: translate(-50%, -140%);
+  white-space: nowrap;
+}
+
+body.tab-tearing {
+  user-select: none;
+  cursor: grabbing;
+}
+
 /* content area fills the rest; views manage their own scrolling */
 .tab-pane {
   flex: 1;
